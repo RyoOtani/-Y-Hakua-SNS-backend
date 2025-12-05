@@ -30,11 +30,11 @@ import SearchResults from './pages/search_result/search_result';
 import AuthCallback from './pages/AuthCallback';
 import PrivateRoute from './components/PrivateRoute';
 import { useEffect } from 'react';
-import axios from 'axios';
+
 import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
 import { useContext } from 'react';
 import { AuthContext } from './state/AuthContext';
-
+import axios from 'axios';
 
 
 function App() {
