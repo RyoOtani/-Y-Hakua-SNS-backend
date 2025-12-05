@@ -1,0 +1,46 @@
+.seachResultContainer {
+    display: flex;
+    width: 100%;
+    background-color: rgb(255, 248, 248);
+}
+
+.sidebar {
+    flex: 2.5;
+    position: sticky;
+    top: 50px;
+  /* 必要に応じて z-index を調整 */
+    z-index: 99;
+}
+
+
+.SearchResultRightConteiner {
+    flex: 9.5;
+    display: flex;
+}
+
+.searchResultSpace {
+    flex: 6;
+}
+
+.searchResultSpace {
+    padding: 20px;
+}
+
+@media screen and (min-width:471px){
+    .bottombar {
+        display: none;       
+    }
+}
+
+.bottombar {
+    position: sticky;
+    bottom: 0;
+}
+
+
+
+.border-b_py-2{
+    list-style: none;
+}
+
+

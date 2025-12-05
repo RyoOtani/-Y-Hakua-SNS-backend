@@ -1,0 +1,69 @@
+.profileContainer {
+    display: flex;
+    width: 100%;
+    background-color: rgb(255, 248, 248);
+}
+
+.sidebar {
+    flex: 2.5;
+    position: sticky;
+    top: 50px;
+  /* 必要に応じて z-index を調整 */
+    z-index: 99;
+}
+
+.profileRight {
+    flex: 9.5;
+}
+
+.profileCover {
+    height: 320px;
+    position: relative;
+}
+
+.profileCoverImg {
+    width: 100%;
+    height: 250px;
+    object-fit: cover;
+}
+
+.profileUserImg {
+    width: 150px;
+    height: 150px;
+    object-fit: cover;
+    border-radius: 50%;
+    position: absolute;
+    margin: auto;
+    left: 0;
+    top: 150px;
+    right: 0;
+    /* border: 3px solid white; */
+}
+
+.profileInfo {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.profileInfoName {
+    font-size: 24px;
+    font-weight: bolder;
+}
+
+.profileRightBottom {
+    display: flex;
+}
+
+.bottombar {
+    position: sticky;
+    bottom: 0;
+
+}
+
+@media screen and (min-width:471px){
+    .bottombar {
+        display: none;
+    }
+}

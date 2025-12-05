@@ -1,0 +1,158 @@
+.post {
+    width: 105%;
+    border-radius: 10px;
+    box-shadow: 0px 0px 0px 2px #cfcfcf;
+    margin: 30px 0;
+}
+
+.postWrapper {
+    padding: 10px;
+}
+
+.postProfileImg {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+.postTop {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.postTopLeft {
+    display: flex;
+    align-items: center;
+}
+
+.postUserName {
+    font-size: 15px;
+    font-weight: bolder;
+    margin: 0 10px;
+}
+
+.postDate {
+    font-size: 12px;
+}
+
+.postCenter {
+    margin: 20px 0;
+}
+
+.postImg {
+    margin-top: 20px;
+    width: 100%;
+    max-height: 500px;
+    object-fit: contain;
+}
+
+.postBottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.postBottomLeft {
+    display: flex;
+    align-items: center;
+}
+
+.LikeIcon {
+    width: 24px;
+    height: 24px;
+    margin-right: 5px;
+    cursor: pointer;
+}
+
+.postLikeCounter {
+    font-size: 15px;
+}
+
+.postCommentText {
+    cursor: pointer;
+    font-size: 15px;
+    display: flex;
+    margin-right: 3px;
+    align-items: center;
+}
+
+.UsersMore {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.userMoreWrapper {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+.userMenu {
+  position: absolute;
+  top: calc(100% + 6px); /* アイコンの下、6px 開ける */
+  left: 50%;
+  transform: translateX(-50%); /* アイコンの中央に水平合わせ */
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  box-shadow: 0 1px 1px rgba(0,0,0,0.08);
+  padding: 6px;
+  border-radius: 6px;
+  z-index: 2000;
+  min-width: 120px;
+  margin: 0; /* 既存の余白をリセット */
+}
+
+.logoutBtn {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #222;
+  text-align: center;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-weight: 600;
+  border-radius: 4px;
+}
+
+.logoutBtn:hover {
+  background: #f5f5f5;
+}
+
+/* exciting code with AI */
+
+/* スマホサイズ（600px以下）向けの投稿サイズ調整 */
+@media only screen and (max-width: 370px) {
+  .post {
+    width: 100%;
+    margin: 15px 0;
+  }
+  .postWrapper {
+    padding: 5px;
+  }
+  .postUserName {
+    font-size: 13px;
+    margin: 0 8px;
+  }
+  .postDate {
+    font-size: 10px;
+  }
+  .postLikeCounter,
+  .postCommentText {
+    font-size: 13px;
+  }
+  .postImg {
+    max-height: 300px;
+  }
+}
+
+/* スマホサイズが920px以下の場合、Shareと同じサイズに調整 */
+@media only screen and (max-width: 920px) {
+  .post {
+    width: 100%;
+    margin: 20px 0;
+  }
+}

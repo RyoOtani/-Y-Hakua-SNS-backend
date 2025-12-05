@@ -1,0 +1,215 @@
+const router = require("express").Router();
+const Post = require("../models/Post");
+const User = require("../models/User");
+
+//create a post
+router.post("/", async (req, res) => {
+  const newPost = new Post(req.body);
+  try {
+    const savedPost = await newPost.save();
+    return res.status(200).json(savedPost);
+  } catch (err) {
+    return res.status(500).json(err);
+  }
+});
+
+//update a post
+router.put("/:id", async (req, res) => {
+  try {
+    //投稿したidを取得
+    const post = await Post.findById(req.params.id);
+    if (post.userId === req.body.userId) {
+      await post.updateOne({ $set: req.body });
+      res.status(200).json("the post has been updated");
+    } else {
+      res.status(403).json("you can update only your post");
+    }
+  } catch (err) {
+    res.status(403).json(err);
+  }
+});
+
+//delete a post
+router.delete("/:id", async (req, res) => {
+  try {
+    //投稿したidを取得
+    const post = await Post.findById(req.params.id);
+    if (post.userId === req.body.userId) {
+      await post.deleteOne();
+      res.status(200).json("the post has been deleted");
+    } else {
+      res.status(403).json("you can delete only your post");
+    }
+  } catch (err) {
+    res.status(403).json(err);
+  }
+});
+
+//like/dislike a post
+router.put("/:id/like", async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id);
+    //まだ投稿にいいねが押されていなかったら
+    if (!post.likes.includes(req.body.userId)) {
+      await post.updateOne({ $push: { likes: req.body.userId } });
+      res.status(200).json("The post has been liked");
+      //すでにいいねが押されていたら
+    } else {
+      //いいねしているユーザーを取り除く
+      await post.updateOne({ $pull: { likes: req.body.userId } });
+      res.status(200).json("The post has been disliked");
+    }
+  } catch (err) {
+    res.status(500).json(err);
+  }
+});
+
+
+
+// //get all post of the user
+// router.get("/profile/:username", async (req, res) => {
+//   try {
+//     const user = await User.findOne({ username: req.params.username });
+//     const posts = await Post.find({ userId: user._id });
+//     return res.status(200).json(posts);
+//   } catch (err) {
+//     return res.json(500).json(err);
+//   }
+// });
+
+// 全ユーザーの投稿（グローバルタイムライン）
+router.get("/timeline/all", async (req, res) => {
+  try {
+    const allPosts = await Post.find().sort({ createdAt: -1 });
+    return res.status(200).json(allPosts);
+  } catch (err) {
+    return res.status(500).json(err);
+  }
+});
+
+//get only profile timeline posts
+router.get("/profile/:username", async (req, res) => {
+  try {
+    const user = await User.findOne({ username: req.params.username });
+    const posts = await Post.find({ userId: user._id }).sort({ createdAt:-1 });
+
+    return res.status(200).json(posts);
+  } catch (err) {
+    return res.status(500).json(err);
+  }
+});
+
+// //get timeline posts
+// router.get("/timeline/user/:userId", async (req, res) => {
+//   try {
+//     const currentUser = await User.findById(req.params.userId);
+//     const userPosts = await Post.find({ userId: currentUser._id });
+//     //自分がフォローしている人の投稿を全て取得
+//     const friendPosts = await Promise.all(
+//       currentUser.followings.map((friendId) => {
+//         return Post.find({ userId: friendId });
+//       })
+//     );
+//     return res.status(200).json(userPosts.concat(...friendPosts));
+//   } catch (err) {
+//     return res.status(500).json(err);
+//   }
+// });
+
+// router.get("/", (req, res) => {
+//   console.log("post page");
+// });
+
+//投稿の検索
+// router.get("/search", async (req, res) => {
+//   try {
+//     console.log("Post searching...", req.query, "req.body:", req.body);
+//     const query = req.query.q;
+//     if (!query) {
+//       return res.status(400).json({ message: "検索ワードが必要です" });
+//     }
+
+//     const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+//     const regex = new RegExp(escapeRegex(query), "i");
+
+//     const posts = await Post.find({
+//       $or:[
+//         { desc: { $regex: regex }},
+//         //{ title: { $regex: regex }},
+//       ]
+//     }).populate({path: "userId", select: "username profilePicture"});
+//     res
+//       .status(200)
+//       .json(posts);
+//   } catch (err) {
+//     console.log("post search error:", err);
+//     return res.status(500).json({message : err.message});
+//   }
+// });
+
+router.get('/search', async (req, res) => {
+  try {
+    const { q } = req.query;
+    // ... (q のチェック) ...
+
+    const posts = await Post.find({
+      desc: { $regex: q, $options: 'i' }
+    })
+    // ▼ これが重要！ ▼
+    // 'author' の部分は、あなたのPostモデルの
+    // ユーザーIDを格納しているフィールド名 (例: 'userId') に合わせてください。
+    // .populate('username', 'profilePicture') // ユーザー情報を結合
+    .sort({ createdAt: -1 })
+    .limit(20);
+
+    res.json(posts);
+
+  } catch (err) {
+    // ... (エラーハンドリング)
+    res.status(500).json(err);
+  }
+});
+
+// ... (前回のコード)
+
+// router.get('/search', async (req, res) => {
+//   try {
+//     const { q } = req.query;
+
+//     if (!q || q.trim() === '') {
+//       return res.status(400).json({ msg: '検索キーワードを入力してください' });
+//     }
+
+//     // ▼ 変更点 ▼
+//     // 検索対象のフィールドを 'content' から 'desc' に変更
+//     const posts = await Post.find({
+//       desc: { $regex: q, $options: 'i' }
+//     })
+//     // ▲ 変更点 ▲
+
+//     .populate('author', 'username avatar')
+//     .sort({ createdAt: -1 })
+//     .limit(20);
+
+//     // posts には 'desc' だけでなく、_id, author, createdAt など
+//     // マッチしたPostの全データ（オブジェクト）が配列として格納されています。
+//     // この
+//     res.json(posts); // 
+//   } catch (err) {
+//     // ... (エラーハンドリング)
+//   }
+// });
+
+//get a post
+router.get("/:id", async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id);
+    res.status(200).json(post);
+  } catch (err) {
+    res.status(500).json(err);
+  }
+});
+
+
+module.exports = router;
+

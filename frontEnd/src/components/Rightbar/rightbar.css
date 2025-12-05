@@ -1,0 +1,138 @@
+.rightbar {
+    flex: 3.0;
+}
+
+.rightbarWrapper {
+    padding: 0 0 0 40px;
+}
+
+.eventContainer {
+    display: flex;
+    align-items: center;
+}
+
+.ClassNotification {
+    width: 40px;
+    height: 40px;
+    margin-right: 10px;
+}
+
+.eventDate {
+    font-weight: bolder;
+    font-size: large;
+}
+
+.eventImg {
+    width: 75%;
+    border-radius: 10px;
+    margin: 25px 0 ;
+}
+
+.rightbarTitle {
+    margin-bottom: 20px;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+.FriendListDiv {
+    margin-top: 20px;
+}
+
+.FriendNameList {
+    padding: 10px;
+    margin: 20px;
+}
+
+.rightbarFriend {
+    display: flex;
+}
+
+.rightbarProfileImg {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    margin-right: 10px;
+}
+
+.rightbarUsername {
+    padding-top: 10px;
+}
+
+.promotinTitle {
+    font-size: 18px;
+    font-weight: bold;
+    margin-top: 18px;
+    margin-bottom: 10px;
+}
+
+.rightbarPromotionImg {
+    width: 85%;
+    border-radius: 10px;
+    margin: 25px 0;
+}
+
+.promotionName {
+    font-size: small;
+    color: gray;
+    margin-top: -20px;
+}
+
+.FriendList {
+    margin-bottom: 10px;
+}
+
+.rightbarTitle {
+    font-size: 18px;
+    font-weight: 550;
+    margin-bottom: 10px;
+}
+
+.rightbarInfo {
+    margin-bottom: 30px;
+}
+
+.rightbarInfoKey {
+    font-weight: 550;
+    margin-right: 5px;
+    color: #555;
+}
+
+.rightbarInfoItem {
+    margin-bottom: 10px;
+}
+
+.rightbarFollowings {
+    display : flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+}
+
+.rightbarFollowing {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 20px;
+    cursor: pointer;
+}
+
+.rightbarFollowingName{
+    margin-left: 10px;
+    align-items: center;
+}
+
+.rightbarFollowingImg {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    object-fit: cover;
+}
+
+
+/* ...existing code　with AI... */
+
+/* スマホサイズ（600px以下）の場合、Rightbar を非表示 */
+@media only screen and (max-width: 920px) {
+  .rightbar {
+    display: none;
+  }
+}

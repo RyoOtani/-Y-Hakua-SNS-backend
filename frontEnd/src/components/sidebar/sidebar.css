@@ -1,0 +1,190 @@
+.sidebar {
+    flex: 2.0;
+    /* Remove fixed viewport height so internal wrapper can become sticky */
+    height: auto;
+}
+
+@media screen and (max-width: 510px) {
+    .sidebarWrapper{
+        padding: 0;
+    }
+
+    .sidebarFriend{
+        padding: 0;
+    }
+}
+
+.sidebarWrapper {
+    padding: 10px;
+    /* Make the wrapper sticky so the sidebar content follows while scrolling.
+       top should match the Topbar height so it sits just below it. */
+    position: sticky; /* Safari */
+    top: 50px; /* Topbar height */
+}
+
+/* Responsive: on very small screens, disable sticky so it doesn't cover content */
+@media (max-width: 600px) {
+    .sidebarWrapper {
+        position: static;
+        top: auto;
+    }
+
+
+}
+
+.sidebarList {
+    padding: 0;
+    margin: 0;
+    list-style: none;
+}
+
+.sidebarListItem {
+    display: flex;
+    align-items: center;
+    border-radius: 10px;
+    margin-bottom: 10px;
+    padding: 5px 8px;
+    cursor: pointer;
+    box-shadow: -3px 4px 12px 0px rgba(243, 160, 160, 0.51);
+    -webkit-box-shadow: -3px 4px 12px 0px rgba(244, 159, 159, 0.51);
+    -moz-box-shadow: -3px 4px 12px 0px rgba(245, 153, 153, 0.51);
+    transition: all 0.2s;
+    box-shadow: none;
+}
+
+.sidebarListItem:hover {
+    /*box-shadow: none;*/
+    /*transform: scale(1.002);*/
+    box-shadow: -3px 4px 12px 0px rgba(99, 99, 99, 0.51);
+    -webkit-box-shadow: -3px 4px 12px 0px rgba(88, 84, 84, 0.51);
+    -moz-box-shadow: -3px 4px 12px 0px rgba(76, 73, 73, 0.51);
+}
+
+.sidebarListItemText {
+    font-weight: bolder;
+    padding-top: 3px;
+}
+
+.sidebarHr {
+    margin: 20px 0;
+    border: none;
+}
+
+.sidebarIcon {
+    font-size: 35px !important;
+    margin-right: 10px;
+}
+
+.sidebarFriendImg {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+    margin-right: 3px;
+
+}
+
+.sidebarFriendList {
+    padding: 0;
+    margin: 0;
+    list-style: none;
+}
+
+.sidebarFriend {
+    display: flex;
+    align-items: center;
+    margin-bottom: 15px;
+    cursor: pointer;
+}
+
+.sidebarFriendName {
+    font-weight: bolder;
+}
+
+.sidebarFriend {
+    display: flex;
+    align-items: center;
+    border-radius: 10px;
+    margin-bottom: 10px;
+    padding: 5px 8px;
+    cursor: pointer;
+    box-shadow: -3px 4px 12px 0px rgba(243, 160, 160, 0.51);
+    -webkit-box-shadow: -3px 4px 12px 0px rgba(244, 159, 159, 0.51);
+    -moz-box-shadow: -3px 4px 12px 0px rgba(245, 153, 153, 0.51);
+    transition: all 0.2s;
+    box-shadow: none;
+}
+
+.sidebarFriend:hover {
+    /*box-shadow: none;*/
+    box-shadow: -3px 4px 12px 0px rgba(99, 99, 99, 0.51);
+    -webkit-box-shadow: -3px 4px 12px 0px rgba(88, 84, 84, 0.51);
+    -moz-box-shadow: -3px 4px 12px 0px rgba(76, 73, 73, 0.51);
+}
+
+
+.UsersMore {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.userMoreWrapper {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+.userMenu {
+  position: absolute;
+  top: calc(100% + 6px); /* アイコンの下、6px 開ける */
+  left: 50%;
+  transform: translateX(-50%); /* アイコンの中央に水平合わせ */
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  box-shadow: 0 1px 1px rgba(0,0,0,0.08);
+  padding: 6px;
+  border-radius: 6px;
+  z-index: 2000;
+  min-width: 120px;
+  margin: 0; /* 既存の余白をリセット */
+}
+
+.logoutBtn {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: #222;
+  text-align: center;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-weight: 600;
+  border-radius: 4px;
+}
+
+.logoutBtn:hover {
+  background: #f5f5f5;
+}
+
+
+/* ...existing code... */
+
+/* スマホ表示時：テキスト部分を非表示にしてアイコンのみ表示 */
+@media only screen and (max-width: 600px) {
+  .sidebarListItemText,
+  .sidebarFriendName {
+    display: none;
+  }
+  
+  /* 必要に応じてパディングや余白の調整 */
+  .sidebarListItem {
+    padding: 5px;
+  }
+
+  .sidebar {
+    padding-right: 0px;
+  }
+}
+
+

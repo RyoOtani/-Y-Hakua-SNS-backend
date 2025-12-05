@@ -1,0 +1,47 @@
+.homeContainer {
+    display: flex;
+    width: 100%;
+    background-color: rgb(255, 248, 248);
+}
+
+.sidebar {
+    flex: 2.5;
+    position: sticky;
+    top: 50px;
+  /* 必要に応じて z-index を調整 */
+    z-index: 99;
+}
+
+.bottombar {
+    position: sticky;
+    bottom: 0;
+
+}
+
+.HomeConteinnerRightside {
+    flex: 9.5;
+    display: flex;
+}
+
+@media screen and (max-width:510px) {
+    .sidebar {
+        flex: 1.5;
+    }
+
+    .HomeConteinnerRightside{
+        flex: 10.0;
+    }
+}
+
+@media screen and (max-width:470px) {
+    .sidebar {
+        display: none;
+    }
+}
+
+@media screen and (min-width:471px){
+    .bottombar {
+        display: none;
+    }
+}
+

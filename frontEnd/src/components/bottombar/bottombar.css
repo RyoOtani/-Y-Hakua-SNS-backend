@@ -1,0 +1,48 @@
+.bottombarContainer {
+    position: sticky;
+    bottom: 0;
+    background-color: rgba(244, 241, 241, 0.719);
+    width: 100%;
+}
+
+.BottombarListItem {
+    border-radius: 10px;
+    margin-top: 5px;
+    margin-bottom: 5px;
+    margin-left: 10px;
+    align-items: space-between;
+    cursor: pointer;
+    box-shadow: -3px 4px 12px 0px rgba(243, 160, 160, 0.51);
+    -webkit-box-shadow: -3px 4px 12px 0px rgba(244, 159, 159, 0.51);
+    -moz-box-shadow: -3px 4px 12px 0px rgba(245, 153, 153, 0.51);
+    transition: all 0.2s;
+    box-shadow: none;
+    flex: 2.4;
+}
+
+.bottombarList {
+    margin: 0;
+    list-style: none;
+    display: flex;
+}
+
+.BottomListItem:hover {
+    /*box-shadow: none;*/
+    /*transform: scale(1.002);*/
+    box-shadow: -3px 4px 12px 0px rgba(99, 99, 99, 0.51);
+    -webkit-box-shadow: -3px 4px 12px 0px rgba(88, 84, 84, 0.51);
+    -moz-box-shadow: -3px 4px 12px 0px rgba(76, 73, 73, 0.51);
+}
+
+.BottombarIcon {
+    font-size: 30px !important;
+    margin-left: 10px;
+}
+
+/* @media screen and (min-width:471px){
+    .Bottombar {
+        display: none;
+        position: sticky;
+        bottom: 0;
+    }
+} */

@@ -1,0 +1,101 @@
+.share {
+    width: 100%;
+
+}
+
+.shareTop {
+    display: flex;
+    align-items: center;
+}
+
+.shareProfileImg {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    margin-right: 10px;
+}
+.shareWrapper {
+    width         : 95%;
+    border-radius : 10px;
+    box-shadow: 0px 0px 0px 2px #cfcfcf;
+    margin         : 20px 0px;
+    padding        : 10px;
+}
+
+.shareInput {
+    border: none;
+    width: 100%;
+    height: 60px;
+    font-size: 16px;
+}
+
+.shareInput:focus {
+    outline: none;
+}
+
+.shareHr {
+    border: none;
+}
+
+.shareOptions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.shareOptionDetail {
+    display: flex;
+}
+
+.shareButton {
+    padding: 10px 20px;
+}
+
+.shareOption {
+    display: flex;
+    align-items: center;
+    position   : relative;
+    margin-right: 2px;
+}
+
+.shareOption:hover .onMouseIcon {
+    display: inline;
+}
+
+.onMouseIcon {
+  position   : absolute;
+  display: none;
+  padding: 2px;
+  color: rgb(255, 255, 255);
+  border-radius: 5px;
+  background-color:#427effbf;
+  width: 50px;
+  top: 50px;
+  left: -12px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.shareButton {
+    border: none;
+    padding: 7px;
+    border-radius: 5px;
+    background-color: white;
+    color: black;
+    font-weight: bold;
+    margin-top: 7px;
+    cursor: pointer;
+    margin-right: 10px;
+}
+
+/* ...existing code... */
+
+/* スマホサイズ（920px以下）の場合、Shareの幅を制限し左右中央に配置 */
+@media only screen and (max-width: 920px) {
+  .shareWrapper {
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}

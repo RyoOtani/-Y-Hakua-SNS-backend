@@ -1,0 +1,127 @@
+.topbarContainer {
+  background: -webkit-linear-gradient(135deg, #427eff 0%, #f13f79 70%) no-repeat;
+  background: linear-gradient(135deg, #427eff 0%, #f13f79 70% , rgba(85, 44, 155, 0.407) 25%) no-repeat;
+  height: 50px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.topbarLeft{
+    flex: 3;
+
+}
+
+.logo{
+    font-size: 24px;
+    color: white;
+    font-weight: bold;
+    margin-left: 20px;
+    cursor: pointer;
+}
+
+.sublogo{
+    font-size: 15px ;
+    color: white;
+    font-weight: bold;
+    margin-left: 20px;
+}
+
+.searchbar{
+    width: 100%;
+    height: 30px;
+    background-color: white;
+    border-radius: 25px;
+    display: flex;
+    align-items: center;
+}
+
+.searchIcon{
+    font-size: 20px !important;
+    margin-left: 10px;
+    margin-right: 5px;
+}
+
+.searchInput{
+    border: none;
+    width: 75%;
+}
+
+.searchInput:focus{
+    outline: none;
+}
+
+.topbarCenter{
+    flex: 5;
+}
+
+.topbarRight{
+    flex: 4;
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    color: white;
+}
+
+.topbarIconItem{
+    display: flex;
+    margin-right: 20px;
+    /* position: relative; */
+    margin-top: 5px;
+}
+
+.topbarIconItem1{
+    display: flex;
+    margin-right: 20px;
+    cursor: pointer;
+    position: relative;
+    margin-top: 5px;
+}
+
+
+.topbarImg{
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    cursor: pointer;
+    object-fit: cover;
+    margin-right: 5px;
+    margin-left: 2px;
+}
+
+.topbarIconBadge{
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    background-color: red;
+    color: white;
+    border-radius: 50%;
+    padding: 2px 5px;
+    font-size: 12px;
+    display: flex;
+}
+
+@media screen and (max-width: 500px) {
+    .sublogo {
+        display: none;
+    }
+
+    .topbarIconItem1 {
+        display: none;
+    }
+
+    .topbarLeft{
+        flex: 2.0;
+    }
+
+    .topbarCenter {
+        flex: 8.0;
+    }
+
+    .topbarRight {
+        flex: 2.0;
+    }
+}
