@@ -82,6 +82,7 @@ export default function Sidebar() {
                         Bookmarks
                     </span>
                 </li>
+                {user && (
                 <li className="sidebarListItem">
                     <Link to={`/profile/${user.username}`} style={{textDecoration:"none", color:"inherit"}}>
                         <Person className='sidebarIcon'/>
@@ -92,6 +93,7 @@ export default function Sidebar() {
                         </span>
                     </Link>
                 </li>
+                )}
                 <li className="sidebarListItem">
                     <Settings className='sidebarIcon'/>
                     <span className='sidebarListItemText'>
@@ -99,12 +101,13 @@ export default function Sidebar() {
                     </span>
                 </li>
                 <hr className="sidebarHr" />
+                {user && (
                 <ul className="sidebarFriendList">
                     <li className="sidebarFriend">
                         <img src={
-                            user.profilePicture
-                            ? PUBLIC_FOLDER + user.profilePicture
-                            : PUBLIC_FOLDER + "/person/noAvatar.png"
+                            user.profilePicture?.startsWith("http") 
+                            ? user.profilePicture 
+                            : PUBLIC_FOLDER + "person/noAvatar.png"
                         }
                         alt="" 
                         className='sidebarFriendImg'
@@ -124,6 +127,7 @@ export default function Sidebar() {
                         </div>
                     </li>
                 </ul>
+                )}
             </ul>
         </div>
 

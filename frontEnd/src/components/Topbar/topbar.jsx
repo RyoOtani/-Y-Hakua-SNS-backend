@@ -126,6 +126,7 @@ export default function Topbar({ onSearch, initialValue = '' }) {
                 />
             </form>
         </div>
+        {user && (
         <div className="topbarRight">
             <div className="topbarIconItem">
                 <div className="topbarIconItem1">
@@ -137,15 +138,18 @@ export default function Topbar({ onSearch, initialValue = '' }) {
                     <span className="topbarIconBadge">2</span>
                 </div>
                 <Link to={`/profile/${user.username}`}>
-                    <img src={user.profilePicture 
-                        ? PUBLIC_FOLDER + user.profilePicture 
-                        : PUBLIC_FOLDER + "/person/noAvatar.png"} 
+                    <img src={
+                        user.profilePicture?.startsWith("http") 
+                        ? user.profilePicture 
+                        : PUBLIC_FOLDER + "person/noAvatar.png"
+                    } 
                         alt="" 
                         className="topbarImg" 
                     />
                 </Link>
             </div>
         </div>
+        )}
         
     </div>
   )

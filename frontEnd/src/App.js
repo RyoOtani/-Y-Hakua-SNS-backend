@@ -38,41 +38,41 @@ import axios from 'axios';
 
 
 function App() {
-  const { user } = useContext(AuthContext);
+  const { user, dispatch } = useContext(AuthContext);
   useEffect(() => {
-    // localStorageからトークンを取得して設定
-    const token = localStorage.getItem('token');
-    if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-    }
-  }, []);
+    const fetchUser = async () => {
+      const token = localStorage.getItem('token');
+      if (token) {
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        try {
+          // サーバーに現在のユーザー情報を問い合わせるエンドポイントを想定
+          const response = await axios.get('/users/me'); 
+          dispatch({ type: 'LOGIN_SUCCESS', payload: response.data });
+        } catch (err) {
+          console.error("トークンによるユーザー情報の取得に失敗しました:", err);
+          // トークンが無効な場合などは、エラーとして扱う
+          dispatch({ type: 'LOGIN_FAILURE', payload: err });
+          localStorage.removeItem('token'); // 無効なトークンを削除
+        }
+      }
+    };
+    fetchUser();
+    // dispatchはReactのstate setterなので通常は依存配列に含める必要はありませんが、
+    // ESLintの警告を避けるために含めています。
+  }, [dispatch]);
   
   return (
     <Router>
       <Routes>
-        {/* <Route path="/" element={user ? <Home /> : <Navigate to = "/login" />} />
-        <Route path="/" element={
-            <PrivateRoute>
-              <Home />
-            </PrivateRoute>
-          }
-        />
-        
-        <Route path="/login" element={user ? <Navigate to={"/"} /> : <Login />} />
+        {/* 保護されたルート */}
+        <Route path="/" element={user ? <Home /> : <Navigate to="/login" />} />
+        <Route path="/profile/:username" element={user ? <Profile /> : <Navigate to={"/login"} />} />
+        <Route path="/search" element={user ? <SearchResults /> : <Navigate to={"/login"} />} />
+
+        {/* 公開ルート */}
+        <Route path="/login" element={user ? <Navigate to="/" /> : <Login />} />
+        <Route path="/register" element={user ? <Navigate to="/" /> : <Register />} />
         <Route path="/auth/success" element={<AuthCallback />} />
-        {/* <Route path="/register" element={user ? <Navigate to={"/"} /> : <Register />} /> */}
-        {/* <Route path="/profile/:username" element={user ? <Profile /> : <Navigate to={"/login"} />} /> */}
-        {/* 検索結果ページ */}
-        {/* <Route path="/search" element={user ? <SearchResults /> : <Navigate to={"/login"} />} />  */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/auth/success" element={<AuthCallback />} />
-        <Route path="/"
-          element={
-            <PrivateRoute>
-              <Home />
-            </PrivateRoute>
-          }
-        />
       </Routes>  
     </Router>
   );

@@ -23,12 +23,12 @@ export default function Timeline( {username} ) {
       setPosts(response.data);
     }
     fetchPosts();
-  }, [ username , user._id ]);
+  }, [ username , user?._id ]);
 
   return (
     <div className='timeline'>
       <div className="timelineWrapper">
-        <Share className="Share"/>
+        {user && (!username || username === user.username) && <Share className="Share"/>}
         {posts.map((post) => (
           <Post post={post} key={post._id}/>
         ))}

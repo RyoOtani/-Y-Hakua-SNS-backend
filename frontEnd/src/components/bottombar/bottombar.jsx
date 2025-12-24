@@ -28,11 +28,13 @@ export default function Bottombar() {
             <li className="BottombarListItem">
                <MessageRounded className='BottombarIcon'/>
              </li>
+            {user && (
             <li className="BottombarListItem">
                 <Link to={`/profile/${user.username}`} style={{textDecoration:"none", color:"inherit"}}>
                     <Person className='BottombarIcon'/>
                 </Link>
             </li>
+            )}
             <li className="BottombarListItem">
                 <Settings className='BottombarIcon'/>
 

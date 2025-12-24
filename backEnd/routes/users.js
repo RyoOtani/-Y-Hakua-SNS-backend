@@ -234,5 +234,15 @@ router.get("/search", async (req, res) => {
     }
 });
 
+//googleのログインに関する事項
+router.get("/me", (req, res) => {
+  if (req.isAuthenticated()) {
+    // パスワードを除いてユーザー情報を返す
+    const { password, updatedAt, ...other } = req.user._doc;
+    res.status(200).json(other);
+  } else {
+    res.status(401).json("ログインしていません");
+  }
+});
 
 module.exports = router;

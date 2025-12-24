@@ -28,14 +28,17 @@ export default function Share() {
   }
   
   return (
+    <>
+    {user && (
     <div className='share'>
         <div className="shareWrapper">
             <div className="shareTop">
                 <img 
                    src={
-                            user.profilePicture ?
-                            PUBLIC_FOLDER + user.profilePicture
-                            : PUBLIC_FOLDER + "/person/noAvatar.png"}
+                            user.profilePicture?.startsWith("http") 
+                            ? user.profilePicture 
+                            : PUBLIC_FOLDER + "person/noAvatar.png"
+                        }
                     alt="" 
                     className="shareProfileImg" 
                 />
@@ -89,5 +92,7 @@ export default function Share() {
             </div>
         </div>
     </div>
+    )}
+    </>
   )
 }

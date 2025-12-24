@@ -16,6 +16,7 @@
     "express-session": "^1.18.2",
     "googleapis": "^166.0.0",
     "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.3",
     "mongodb": "^6.18.0",
     "mongoose": "^8.17.1",
     "morgan": "^1.10.1",

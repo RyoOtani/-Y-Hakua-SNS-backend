@@ -109,7 +109,8 @@ require('./config/passport');
 
 // ルート
 app.use('/api/auth', require('./routes/auth'));
-app.use('/api/user', require('./routes/user'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/posts', require('./routes/post'));
 
 const PORT = process.env.PORT || 8800;
 app.listen(PORT, () => {
