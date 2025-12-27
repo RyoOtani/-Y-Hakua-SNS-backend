@@ -80,6 +80,9 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Serve static assets from the frontend's public directory
+app.use(express.static('../frontEnd/public')); 
+
 // セッション設定
 app.use(session({
   secret: process.env.SESSION_SECRET || 'your-secret-key',
@@ -111,6 +114,9 @@ require('./config/passport');
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/posts', require('./routes/post'));
+app.use('/api/classroom', require('./routes/classroom'));
+
+// サーバー起動
 
 const PORT = process.env.PORT || 8800;
 app.listen(PORT, () => {

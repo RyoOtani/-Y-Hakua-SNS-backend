@@ -97,6 +97,13 @@ const userSchema = new mongoose.Schema(
     profilePicture: {
       type: String,
     },
+    // Add fields to store Google OAuth tokens
+    accessToken: {
+      type: String,
+    },
+    refreshToken: {
+      type: String,
+    },
     followers: [
       {
         type: mongoose.Schema.Types.ObjectId,

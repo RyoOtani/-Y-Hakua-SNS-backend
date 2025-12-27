@@ -3,6 +3,7 @@ import React, { useContext , useState , useRef , useEffect } from 'react'
 import './sidebar.css'
 import { Link , useNavigate } from 'react-router-dom'
 import { AuthContext } from '../../state/AuthContext';
+import axios from 'axios';
 
 export default function Sidebar() {
   const PUBLIC_FOLDER= process.env.REACT_APP_PUBLIC_FOLDER;
@@ -11,23 +12,23 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const menuRef = useRef(null);
   
-  const handleLogout = () => {
-    // AuthContext に dispatch があれば使う
+  const handleLogout = async () => {
     try {
-      if (dispatch) dispatch({ type: "LOGOUT" });
-    } catch (e) {
-      console.error("logout dispatch error", e);
+      await axios.get("/auth/logout", { withCredentials: true });
+      // Clear token from localStorage
+      localStorage.removeItem('token');
+      // Clear Authorization header from axios defaults
+      delete axios.defaults.headers.common['Authorization'];
+
+      if (dispatch) {
+        dispatch({ type: "LOGOUT" });
+      }
+      // Redirect to login page
+      window.location.href = "/login";
+    } catch (err) {
+      console.error("Logout failed:", err);
     }
-    // ローカルストレージもクリア
-    try { 
-        localStorage.removeItem("user"); 
-    } catch (e) {
-        console.error("localStorage clear error", e);
-    }
-    // ログイン画面へ遷移
-    window.location.reload();
-    navigate("/login");
-  }
+  };
 
   const toggleMenu = (e) => {
     e.stopPropagation();

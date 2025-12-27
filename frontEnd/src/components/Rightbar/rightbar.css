@@ -127,6 +127,65 @@
     object-fit: cover;
 }
 
+/* Google Classroom Integration */
+.classroomContainer {
+  margin-bottom: 20px;
+}
+
+.rightbarButton {
+  width: 85%;
+  border: none;
+  background-color: #4285F4; /* Google Blue */
+  color: white;
+  padding: 10px;
+  border-radius: 5px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-bottom: 10px;
+  transition: background-color 0.3s;
+}
+
+.rightbarButton:hover:not(:disabled) {
+  background-color: #357ae8;
+}
+
+.rightbarButton:disabled {
+  background-color: #a0c3f0;
+  cursor: not-allowed;
+}
+
+.classroomList {
+  padding: 0;
+  margin: 10px 0 0 0;
+  list-style: none;
+}
+
+.classroomListItem {
+  background-color: #f0f2f5;
+  border-radius: 5px;
+  padding: 8px 12px;
+  margin-bottom: 5px;
+  font-size: 14px;
+}
+
+.errorMessage {
+  color: #d93025; /* Google Red */
+  font-size: 14px;
+  display: block;
+  margin-top: 5px;
+}
+
+.noCoursesText {
+  color: grey;
+  font-size: 14px;
+}
+
+.rightbarHr {
+  margin: 20px 0;
+  border: 0;
+  border-top: 1px solid #e0e0e0;
+}
+
 
 /* ...existing code　with AI... */
 

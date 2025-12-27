@@ -91,6 +91,9 @@ router.get("/timeline/all", async (req, res) => {
 router.get("/profile/:username", async (req, res) => {
   try {
     const user = await User.findOne({ username: req.params.username });
+    if (!user) {
+      return res.status(404).json("User not found");
+    }
     const posts = await Post.find({ userId: user._id }).sort({ createdAt:-1 });
 
     return res.status(200).json(posts);

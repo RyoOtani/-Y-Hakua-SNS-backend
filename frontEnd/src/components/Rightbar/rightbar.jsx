@@ -1,51 +1,60 @@
-import React from 'react';
+import React, { useState } from 'react';
 import './rightbar.css';
+import axios from 'axios';
 
 export default function Rightbar( { user } ) {
   const PUBLIC_FOLDER= process.env.REACT_APP_PUBLIC_FOLDER;
   
   const HomeRightbar = () => {
+    const [courses, setCourses] = useState([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [error, setError] = useState(null);
+
+    // Function to fetch classroom courses
+    const handleSync = async () => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        // Use the proxy to call the backend API
+        const res = await axios.get("/classroom/courses"); 
+        setCourses(res.data);
+      } catch (err) {
+        console.error("Failed to fetch classroom courses:", err);
+        if (err.response && err.response.status === 401) {
+          // Check for a specific message if needed, but 401 from this endpoint implies token issue
+          // Redirect to Google OAuth to re-authenticate and get a new refresh token
+          window.location.href = "/api/auth/google"; 
+        } else {
+          setError("コースの取得に失敗しました。Googleアカウントでログインしているか確認してください。"); // Set a user-friendly error message
+        }
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
     return (
       <>
-        
-          <div className="eventContainer">
-            <img src="assets/star.png" alt="" className="ClassNotification" />
-            <span className="eventText">
-              <b className="eventDate">
-                New timetable change
-              </b>
-            </span>
-          </div>
-          <img src="assets/event.jpeg" alt="" className="eventImg" />
-          <h4 className="rightbarTitle">Upcoming Events</h4>
-          <ul className="friendList">
-            <span className="FriendNameList">Classmates</span>
-            <div className="FriendListDiv">
-              <li className="rightbarFriend">
-                <div className="rightbarProfileImgContainer">
-                  <img src="assets/person/2.jpeg" alt="" className="rightbarProfileImg" />
-                </div>
-                <span className="rightbarUsername">
-                  Ashidate
-                </span>
-              </li>
-              <li className="rightbarFriend">
-                <div className="rightbarProfileImgContainer">
-                  <img src="assets/person/3.jpeg" alt="" className="rightbarProfileImg" />
-                </div>
-                <span className="rightbarUsername">
-                  Otaka
-                </span>
-              </li>
-            </div>
+        {/* Google Classroom Integration Section */}
+        <div className="classroomContainer">
+          <h4 className="rightbarTitle">Google Classroom</h4>
+          <button className="rightbarButton" onClick={handleSync} disabled={isLoading}>
+            {isLoading ? "同期中..." : "クラスを同期"}
+          </button>
+          {error && <span className="errorMessage">{error}</span>}
+          <ul className="classroomList">
+            {courses.length > 0 ? (
+              courses.map((course) => (
+                <li key={course.id} className="classroomListItem">
+                  {course.name}
+                </li>
+              ))
+            ) : (
+              !isLoading && !error && <span className="noCoursesText">同期ボタンを押してクラスを表示</span>
+            )}
           </ul>
-          <p className="promotionTitple">先生からのお知らせ</p>
-          <img src="/promotion/promotion1.jpeg" alt="" className="rightbarPromotionImg" />
-          <p className="promotionName">今日の体育は体育館でやります</p>
-          <img src="assets/promotion/promotion2.jpeg" alt="" className="rightbarPromotionImg" />
-          <p className="promotionName">明日の化学は実験室でやります</p>
-          <img src="assets/promotion/promotion3.jpeg" alt="" className="rightbarPromotionImg" />
-          <p className="promotionName">明日の保険は発表です</p>
+        </div>
+        <hr className="rightbarHr" />
+
         
       </>
     )

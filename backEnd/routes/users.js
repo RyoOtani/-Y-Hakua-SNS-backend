@@ -234,15 +234,15 @@ router.get("/search", async (req, res) => {
     }
 });
 
+const passport = require("passport");
+
+// ... (other routes) ...
+
 //googleのログインに関する事項
-router.get("/me", (req, res) => {
-  if (req.isAuthenticated()) {
+router.get("/me", passport.authenticate('jwt', { session: false }), (req, res) => {
     // パスワードを除いてユーザー情報を返す
     const { password, updatedAt, ...other } = req.user._doc;
     res.status(200).json(other);
-  } else {
-    res.status(401).json("ログインしていません");
-  }
 });
 
 module.exports = router;

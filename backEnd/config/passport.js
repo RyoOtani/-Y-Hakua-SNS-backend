@@ -103,29 +103,77 @@ passport.use(
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
       callbackURL: '/api/auth/google/callback',
+      scope: [
+        "profile",
+        "email",
+        "https://www.googleapis.com/auth/classroom.courses.readonly",
+      ],
+      accessType: 'offline',
+      prompt: 'consent',
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
+        console.log(`[GoogleStrategy] User ${profile.id} - refreshToken received from Google: ${refreshToken ? 'exists' : 'MISSING'}`);
+
         let user = await User.findOne({ googleId: profile.id });
 
         if (user) {
-          return done(null, user);
+          // User exists, update tokens and other profile info
+          user.username = profile.displayName || profile.emails[0].value.split('@')[0];
+          user.email = profile.emails[0].value;
+          user.profilePicture = profile.photos[0]?.value;
+          user.accessToken = accessToken;
+          // Only update refreshToken if a new one is provided by Google
+          // or if the existing one is missing.
+          if (refreshToken) {
+            user.refreshToken = refreshToken;
+          }
+          await user.save();
+          console.log(`[GoogleStrategy] Existing user ${user.id} - refreshToken after save: ${user.refreshToken ? 'exists' : 'MISSING'}`);
+        } else {
+          // New user, create them
+          user = new User({
+            username: profile.displayName || profile.emails[0].value.split('@')[0],
+            email: profile.emails[0].value,
+            googleId: profile.id,
+            profilePicture: profile.photos[0]?.value,
+            accessToken: accessToken,
+            refreshToken: refreshToken, // Save if provided on initial login
+          });
+          await user.save();
+          console.log(`[GoogleStrategy] New user ${user.id} - refreshToken after save: ${user.refreshToken ? 'exists' : 'MISSING'}`);
         }
-
-        user = new User({
-          username: profile.displayName || profile.emails[0].value.split('@')[0],
-          email: profile.emails[0].value,
-          googleId: profile.id,
-          profilePicture: profile.photos[0]?.value,
-        });
-
-        await user.save();
         return done(null, user);
       } catch (error) {
+        console.error(`[GoogleStrategy] Error for user ${profile.id}:`, error);
         return done(error, null);
       }
     }
   )
+);
+
+const { Strategy: JwtStrategy, ExtractJwt } = require('passport-jwt');
+
+// ... (existing GoogleStrategy code) ...
+
+// JWT Strategy for protecting routes
+const jwtOptions = {
+  jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+  secretOrKey: process.env.JWT_SECRET || 'your-jwt-secret',
+};
+
+passport.use(
+  new JwtStrategy(jwtOptions, async (jwt_payload, done) => {
+    try {
+      const user = await User.findById(jwt_payload.id);
+      if (user) {
+        return done(null, user);
+      }
+      return done(null, false);
+    } catch (error) {
+      return done(error, false);
+    }
+  })
 );
 
 passport.serializeUser((user, done) => {
@@ -135,8 +183,14 @@ passport.serializeUser((user, done) => {
 passport.deserializeUser(async (id, done) => {
   try {
     const user = await User.findById(id);
+    if (user) {
+      console.log(`[deserializeUser] User ${user.id} refreshToken: ${user.refreshToken ? 'exists' : 'MISSING'}`);
+    } else {
+      console.log(`[deserializeUser] User with ID ${id} not found.`);
+    }
     done(null, user);
-  } catch (error) {
-    done(error, null);
+  } catch (err) {
+    console.error(`[deserializeUser] Error deserializing user ${id}:`, err);
+    done(err, null);
   }
 });
