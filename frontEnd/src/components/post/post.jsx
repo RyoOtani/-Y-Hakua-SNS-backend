@@ -6,16 +6,20 @@ import { ChatBubbleOutline, FavoriteOutlined, MoreVert } from '@mui/icons-materi
 import { format } from 'timeago.js';
 import { Link } from 'react-router-dom';
 import { AuthContext } from '../../state/AuthContext';
+import Comment from '../comment/Comment'; // Commentコンポーネントをインポート
 
 export default function Post({ post }) {
     const PUBLIC_FOLDER= process.env.REACT_APP_PUBLIC_FOLDER;
     const [likes, setLikes] = React.useState(post.likes.length);
     const [isLiked, setIsLiked] = React.useState(false);
     const {user: currentUser} = useContext(AuthContext);
-    const [user, setUser] = useState({});
     const [showMenu, setShowMenu] = useState(false);
     const menuRef = useRef(null);
-    
+    const [showComments, setShowComments] = useState(false); // コメント表示用のstate
+    const [commentText, setCommentText] = useState(""); // コメント入力用
+    const [commentCount, setCommentCount] = useState(post.comment); // コメント数用
+    const [comments, setComments] = useState([]); // コメントリスト用
+
     const handleLike = async () => {
         try {
             //いいねのAPI
@@ -37,6 +41,31 @@ export default function Post({ post }) {
             console.log(err);
         }
     }
+
+    const handleCommentSubmit = async () => {
+        if (commentText.trim() === "") return;
+    
+        try {
+            const res = await axios.post(`/posts/${post._id}/comment`, {
+                userId: currentUser._id,
+                desc: commentText,
+            });
+            // サーバーからのレスポンスに currentUser の情報を付加して擬似的なpopulateを行う
+            const newComment = {
+                ...res.data,
+                userId: {
+                    _id: currentUser._id,
+                    username: currentUser.username,
+                    profilePicture: currentUser.profilePicture,
+                },
+            };
+            setComments([newComment, ...comments]); // 新しいコメントをリストの先頭に追加
+            setCommentText("");
+            setCommentCount(commentCount + 1);
+        } catch (err) {
+            console.error("コメントの投稿に失敗しました", err);
+        }
+    };
     
     const toggleMenu = (e) => {
         e.stopPropagation();
@@ -52,26 +81,31 @@ export default function Post({ post }) {
         document.addEventListener("click", handleClickOutSide);
         return ()=> document.removeEventListener("click", handleClickOutSide);
     },[]);
-    
-    
-    useEffect(() => {
-        const fetchUser = async () => {
-          const response = await axios.get(`/users?userId=${post.userId}`);
-          //console.log(response.data);
-          setUser(response.data);
-        }
-        fetchUser();
-    }, [post.userId]);
 
+    useEffect(() => {
+        const fetchComments = async () => {
+            if (showComments) {
+                try {
+                    const res = await axios.get(`/posts/${post._id}/comments`);
+                    setComments(res.data); // バックエンドでソート済み
+                } catch (err) {
+                    console.error("コメントの取得に失敗しました", err);
+                }
+            }
+        };
+        fetchComments();
+    }, [showComments, post._id]);
+    
+    
   return (
     <div className='post'>
         <div className="postWrapper">
             <div className="postTop">
                 <div className="postTopLeft">
-                    <Link to={`/profile/${user.username}`}>
+                    <Link to={`/profile/${post.userId?.username}`}>
                         <img src={
-                            user.profilePicture?.startsWith("http") 
-                            ? user.profilePicture 
+                            post.userId?.profilePicture?.startsWith("http") 
+                            ? post.userId.profilePicture 
                             : PUBLIC_FOLDER + "person/noAvatar.png"
                         } 
                             alt="" 
@@ -79,7 +113,7 @@ export default function Post({ post }) {
                         />
                     </Link>
                     <span className='postUserName'>
-                        {user.username}
+                        {post.userId?.username}
                     </span>
                     <span className="postDate">
                         {format(post.createdAt)}
@@ -91,9 +125,9 @@ export default function Post({ post }) {
                     </div>
                     {showMenu && (
                         <div className="userMenu" onClick={(e)=>e.stopPropagation()}>
-                            {post.userId === currentUser._id && (
+                            {post.userId._id === currentUser._id && (
                                 <button className='logoutBtn' onClick={handledelete}>Delete Post</button>
-                            )}{post.userId !== currentUser._id && (
+                            )}{post.userId._id !== currentUser._id && (
                                 <button className='logoutBtn' >You can't delete this post</button>
                             )}
                         </div>
@@ -113,13 +147,33 @@ export default function Post({ post }) {
                         {likes}
                     </span>
                 </div>
-                <div className="postBottomRight">
+                <div className="postBottomRight" onClick={() => setShowComments(!showComments)} style={{cursor: 'pointer'}}>
                     <span className="postCommentText">
                         <ChatBubbleOutline className='postCommentText' sx={{ fontSize: '20px' }} />
-                        {post.comment}
+                        {commentCount}
                     </span>
                 </div>
             </div>
+            {showComments && (
+                <div className="commentSection">
+                    {/* コメント入力フォーム */}
+                    <div className="commentInputWrapper">
+                        <input 
+                            placeholder="コメントを追加..." 
+                            className="commentInput" 
+                            value={commentText}
+                            onChange={(e) => setCommentText(e.target.value)}
+                        />
+                        <button className="commentSubmitButton" onClick={handleCommentSubmit}>送信</button>
+                    </div>
+                    {/* コメント一覧 */}
+                    <div className="commentList">
+                        {comments.map((comment) => (
+                            <Comment key={comment._id} comment={comment} />
+                        ))}
+                    </div>
+                </div>
+            )}
         </div>
     </div>
   )

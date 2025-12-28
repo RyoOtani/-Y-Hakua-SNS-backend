@@ -150,9 +150,79 @@
 }
 
 /* スマホサイズが920px以下の場合、Shareと同じサイズに調整 */
+
 @media only screen and (max-width: 920px) {
+
   .post {
+
     width: 100%;
+
     margin: 20px 0;
+
   }
+
 }
+
+
+
+.commentSection {
+
+  margin-top: 15px;
+
+  padding: 0 10px;
+
+}
+
+
+
+.commentInputWrapper {
+
+  display: flex;
+
+  align-items: center;
+
+  margin-bottom: 15px;
+
+}
+
+
+
+.commentInput {
+
+  flex: 1;
+
+  border: 1px solid #ccc;
+
+  border-radius: 20px;
+
+  padding: 8px 15px;
+
+  margin-right: 10px;
+
+}
+
+
+
+.commentSubmitButton {
+
+  border: none;
+
+  background-color: #1877f2;
+
+  color: white;
+
+  border-radius: 5px;
+
+  padding: 8px 12px;
+
+  cursor: pointer;
+
+}
+
+
+
+.commentList {
+  max-height: 200px; /* コメントが多くなった場合にスクロールさせる */
+  overflow-y: auto;
+}
+

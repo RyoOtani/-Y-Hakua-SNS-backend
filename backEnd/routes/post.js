@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const Post = require("../models/Post");
 const User = require("../models/User");
+const Comment = require("../models/Comment");
 
 //create a post
 router.post("/", async (req, res) => {
@@ -80,9 +81,12 @@ router.put("/:id/like", async (req, res) => {
 // 全ユーザーの投稿（グローバルタイムライン）
 router.get("/timeline/all", async (req, res) => {
   try {
-    const allPosts = await Post.find().sort({ createdAt: -1 });
+    const allPosts = await Post.find()
+      .populate("userId", "username profilePicture")
+      .sort({ createdAt: -1 });
     return res.status(200).json(allPosts);
   } catch (err) {
+    console.error("Error in /timeline/all:", err);
     return res.status(500).json(err);
   }
 });
@@ -94,10 +98,13 @@ router.get("/profile/:username", async (req, res) => {
     if (!user) {
       return res.status(404).json("User not found");
     }
-    const posts = await Post.find({ userId: user._id }).sort({ createdAt:-1 });
+    const posts = await Post.find({ userId: user._id })
+      .populate("userId", "username profilePicture")
+      .sort({ createdAt: -1 });
 
     return res.status(200).json(posts);
   } catch (err) {
+    console.error("Error in /profile/:username:", err);
     return res.status(500).json(err);
   }
 });
@@ -208,6 +215,40 @@ router.get("/:id", async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
     res.status(200).json(post);
+  } catch (err) {
+    res.status(500).json(err);
+  }
+});
+
+//コメントを作成する
+router.post("/:id/comment", async (req, res) => {
+  try {
+    // コメントを作成
+    const newComment = new Comment({
+      postId: req.params.id,
+      userId: req.body.userId,
+      desc: req.body.desc,
+    });
+    const savedComment = await newComment.save();
+
+    // 該当する投稿のコメント数をインクリメント
+    await Post.findByIdAndUpdate(req.params.id, {
+      $inc: { comment: 1 },
+    });
+
+    return res.status(200).json(savedComment);
+  } catch (err) {
+    return res.status(500).json(err);
+  }
+});
+
+//コメントを取得する
+router.get("/:id/comments", async (req, res) => {
+  try {
+    const comments = await Comment.find({ postId: req.params.id })
+      .populate("userId", "username profilePicture")
+      .sort({ createdAt: -1 });
+    res.status(200).json(comments);
   } catch (err) {
     res.status(500).json(err);
   }
