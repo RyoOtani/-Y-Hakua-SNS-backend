@@ -1,7 +1,86 @@
 .timeline {
-    flex: 6;
+    flex: 5.5;
 }
 
-.timeline {
+.timelineWrapper {
     padding: 20px;
+}
+
+.timelineHeader {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 20px;
+    position: sticky;
+    top: 60px;
+    /* Topbar height + margin */
+    z-index: 100;
+}
+
+.timelineHeaderButtons {
+    display: flex;
+    gap: 15px;
+    /* ボタン間のスペース */
+}
+
+.refreshButton {
+    display: flex;
+    align-items: center;
+    background-color: white;
+    padding: 8px 16px;
+    border-radius: 20px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    transition: all 0.2s;
+    color: #1877f2;
+}
+
+/* Sync Button Specifics */
+.syncButton {
+    color: #0f9d58;
+    /* Google Classroom Green */
+}
+
+.syncButton:hover {
+    background-color: #f0f8f4;
+}
+
+.refreshButton:hover {
+    background-color: #f0f2f5;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.refreshButton:active {
+    transform: translateY(0);
+}
+
+.refreshIcon {
+    margin-right: 5px;
+    font-size: 20px !important;
+}
+
+.refreshText {
+    font-weight: 600;
+    font-size: 14px;
+}
+
+/* Refresh Animation */
+.refreshButton.refreshing .refreshIcon {
+    animation: rotate 1s linear infinite;
+}
+
+/* Sync Animation (Pulse) */
+.syncButton.syncing .refreshIcon {
+    animation: rotate 1s linear infinite;
+    /* Reuse rotate for sync or use pulse */
+}
+
+@keyframes rotate {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
 }

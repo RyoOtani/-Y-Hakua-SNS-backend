@@ -27,9 +27,17 @@
     font-size: 14px;
 }
 
+.dark-theme .commentUsername {
+  color: #e4e6eb; /* Light text for username in dark mode */
+}
+
 .commentDate {
     font-size: 12px;
     color: #65676b;
+}
+
+.dark-theme .commentDate {
+  color: #b0b3b8; /* Lighter grey for date in dark mode */
 }
 
 .commentDesc {
@@ -40,4 +48,9 @@
     display: inline-block;
     margin: 0;
     line-break: anywhere;
+}
+
+.dark-theme .commentDesc {
+  background-color: #2e2b2b; /* Even darker background for comment text in dark mode */
+  color: #e4e6eb; /* Light text for comment description in dark mode */
 }

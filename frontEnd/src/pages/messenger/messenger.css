@@ -1,0 +1,309 @@
+/* Main Container with Sidebar */
+.messengerContainer {
+  display: flex;
+  height: calc(100vh - 50px);
+}
+
+.messengerSidebar {
+  flex: 2.5;
+  background-color: #fff;
+  border-right: 1px solid #e0e0e0;
+  overflow-y: auto;
+}
+
+/* Override Sidebar component styles for Messenger page */
+.messengerSidebar .sidebarWrapper {
+  position: static;
+  top: 0;
+}
+
+/* Sidebarコンポーネント自体の .sidebar クラスが home.css の影響(sticky, top:50px)を受けているため無効化 */
+.messengerSidebar .sidebar {
+  position: static;
+  /* stickyを解除 */
+  top: 0;
+  /* 50pxのずれを解消 */
+  width: 100%;
+  margin-top: 0;
+  /* 念のため */
+  flex: auto;
+  /* 親のflex制御に従う */
+}
+
+.messenger {
+  flex: 9.5;
+  display: flex;
+  background-color: #f0f2f5;
+}
+
+/* Chat Menu (Left Sidebar) */
+.chatMenu {
+  flex: 3.5;
+  background-color: white;
+  border-right: 1px solid #e0e0e0;
+}
+
+.chatMenuWrapper {
+  padding: 10px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.chatMenuHeader {
+  margin-bottom: 20px;
+}
+
+.chatMenuTitle {
+  font-size: 24px;
+  font-weight: bold;
+  margin-bottom: 15px;
+  display: block;
+}
+
+.chatMenuInput {
+  width: 90%;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 20px;
+  outline: none;
+  background-color: #f0f2f5;
+}
+
+.chatConversationList {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.selectedConversation .conversation {
+  background-color: #e8f0fe !important;
+  /* Selected state */
+}
+
+/* Chat Box (Main Area) */
+.chatBox {
+  flex: 9;
+  /* Expanded to fill space */
+  background-color: #ffffff;
+}
+
+.chatBoxWrapper {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  height: 100%;
+}
+
+.chatBoxTop {
+  height: 100%;
+  overflow-y: scroll;
+  padding: 20px;
+  /* padding-right: 10px; */
+  background-color: white;
+}
+
+.chatBoxBottom {
+  margin-top: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  border-top: 1px solid #ddd;
+  background-color: white;
+}
+
+/* New: Friend Search Results */
+.searchFriendItem {
+  display: flex;
+  align-items: center;
+  padding: 10px;
+  cursor: pointer;
+  border-radius: 10px;
+  transition: background-color 0.2s;
+}
+
+.searchFriendItem:hover {
+  background-color: #f5f5f5;
+}
+
+.searchFriendImg {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-right: 12px;
+}
+
+.searchFriendName {
+  font-weight: 500;
+  font-size: 15px;
+}
+
+.noResults {
+  padding: 15px;
+  color: #65676b;
+  text-align: center;
+  font-size: 14px;
+}
+
+/* New: Chat Header */
+.chatBoxHeader {
+  padding: 10px 20px;
+  border-bottom: 1px solid #ddd;
+  background-color: white;
+  z-index: 10;
+}
+
+.chatHeaderInfo {
+  display: flex;
+  align-items: center;
+}
+
+.chatHeaderImg {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-right: 12px;
+}
+
+.chatHeaderTexts {
+  display: flex;
+  flex-direction: column;
+}
+
+.chatHeaderName {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.chatHeaderStatus {
+  font-size: 12px;
+  color: #00a400;
+  /* Online green */
+}
+
+.dark-theme .chatBoxHeader,
+.dark-theme .chatHeaderInfo {
+  background-color: #15202b;
+  border-bottom: 1px solid #38444d;
+}
+
+.dark-theme .searchFriendItem:hover {
+  background-color: #273340;
+}
+
+.dark-theme .chatHeaderName {
+  color: white;
+}
+
+.dark-theme .searchFriendName {
+  color: white;
+}
+
+.chatMessageInput {
+  width: 80%;
+  height: 50px;
+  padding: 10px;
+  border: none;
+  outline: none;
+  resize: none;
+  font-family: inherit;
+  font-size: 15px;
+}
+
+.chatSubmitButton {
+  width: 70px;
+  height: 40px;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  background-color: #1877f2;
+  color: white;
+  font-weight: bold;
+  transition: background-color 0.2s;
+}
+
+.chatSubmitButton:hover {
+  background-color: #166fe5;
+}
+
+.noConversationOverlay {
+  position: absolute;
+  top: 10%;
+  font-size: 50px;
+  color: rgb(224, 220, 220);
+  cursor: default;
+  width: 100%;
+  text-align: center;
+}
+
+/* Dark Mode Support */
+.dark-theme .messengerContainer {
+  background-color: #15202b;
+}
+
+.dark-theme .messengerSidebar {
+  background-color: #15202b;
+  border-right: 1px solid #38444d;
+}
+
+.dark-theme .messenger {
+  background-color: #15202b;
+}
+
+.dark-theme .chatMenu {
+  background-color: #15202b;
+  border-right: 1px solid #38444d;
+  color: white;
+}
+
+.dark-theme .chatMenuInput {
+  background-color: #273340;
+  border: 1px solid #38444d;
+  color: white;
+}
+
+.dark-theme .selectedConversation .conversation {
+  background-color: #273340 !important;
+}
+
+.dark-theme .chatBox {
+  background-color: #15202b;
+}
+
+.dark-theme .chatBoxTop {
+  background-color: #15202b;
+}
+
+.dark-theme .chatBoxBottom {
+  background-color: #15202b;
+  border-top: 1px solid #38444d;
+}
+
+.dark-theme .chatMessageInput {
+  background-color: transparent;
+  color: white;
+}
+
+.dark-theme .noConversationOverlay {
+  color: #38444d;
+}
+
+.dark-theme .typingIndicator {
+  color: #8899a6;
+}
+
+@media screen and (max-width: 768px) {
+  .chatMenu {
+    flex: 1;
+  }
+
+  .chatMenuInput {
+    display: none;
+  }
+
+  .chatBox {
+    flex: 10;
+  }
+}

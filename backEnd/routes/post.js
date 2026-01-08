@@ -2,12 +2,28 @@ const router = require("express").Router();
 const Post = require("../models/Post");
 const User = require("../models/User");
 const Comment = require("../models/Comment");
+const Notification = require("../models/Notification");
 
 //create a post
 router.post("/", async (req, res) => {
   const newPost = new Post(req.body);
   try {
     const savedPost = await newPost.save();
+
+    // 投稿者のフォロワーを取得して通知を送る
+    const user = await User.findById(req.body.userId);
+    if (user && user.followers && user.followers.length > 0) {
+      const io = req.app.get('io');
+      user.followers.forEach(followerId => {
+        // フォロワーのルームにイベントを送信
+        io.to(followerId.toString()).emit("newPost", {
+          username: user.username,
+          profilePicture: user.profilePicture,
+          postId: savedPost._id
+        });
+      });
+    }
+
     return res.status(200).json(savedPost);
   } catch (err) {
     return res.status(500).json(err);
@@ -35,14 +51,19 @@ router.delete("/:id", async (req, res) => {
   try {
     //投稿したidを取得
     const post = await Post.findById(req.params.id);
-    if (post.userId === req.body.userId) {
+    if (!post) {
+      return res.status(404).json("Post not found");
+    }
+    // ObjectIdを文字列に変換して比較
+    if (post.userId.toString() === req.body.userId) {
       await post.deleteOne();
       res.status(200).json("the post has been deleted");
     } else {
       res.status(403).json("you can delete only your post");
     }
   } catch (err) {
-    res.status(403).json(err);
+    console.error("Delete post error:", err);
+    res.status(500).json(err);
   }
 });
 
@@ -53,6 +74,28 @@ router.put("/:id/like", async (req, res) => {
     //まだ投稿にいいねが押されていなかったら
     if (!post.likes.includes(req.body.userId)) {
       await post.updateOne({ $push: { likes: req.body.userId } });
+
+      // 通知作成 & 送信 (自分の投稿以外)
+      if (post.userId.toString() !== req.body.userId) {
+        const notification = new Notification({
+          sender: req.body.userId,
+          receiver: post.userId,
+          type: "like",
+          post: post._id,
+        });
+        await notification.save();
+
+        const io = req.app.get('io');
+        const sender = await User.findById(req.body.userId);
+
+        io.to(post.userId.toString()).emit("getNotification", {
+          senderId: req.body.userId,
+          senderName: sender.username,
+          type: "like",
+          postId: post._id,
+        });
+      }
+
       res.status(200).json("The post has been liked");
       //すでにいいねが押されていたら
     } else {
@@ -81,9 +124,22 @@ router.put("/:id/like", async (req, res) => {
 // 全ユーザーの投稿（グローバルタイムライン）
 router.get("/timeline/all", async (req, res) => {
   try {
-    const allPosts = await Post.find()
-      .populate("userId", "username profilePicture")
-      .sort({ createdAt: -1 });
+    const allPosts = await Post.aggregate([
+      {
+        $lookup: {
+          from: "users",
+          localField: "userId",
+          foreignField: "_id",
+          as: "userId"
+        }
+      },
+      {
+        $unwind: "$userId"
+      },
+      {
+        $sort: { createdAt: -1 }
+      }
+    ]);
     return res.status(200).json(allPosts);
   } catch (err) {
     console.error("Error in /timeline/all:", err);
@@ -138,10 +194,10 @@ router.get("/profile/:username", async (req, res) => {
 //     if (!query) {
 //       return res.status(400).json({ message: "検索ワードが必要です" });
 //     }
-
+// 
 //     const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 //     const regex = new RegExp(escapeRegex(query), "i");
-
+// 
 //     const posts = await Post.find({
 //       $or:[
 //         { desc: { $regex: regex }},
@@ -160,22 +216,18 @@ router.get("/profile/:username", async (req, res) => {
 router.get('/search', async (req, res) => {
   try {
     const { q } = req.query;
-    // ... (q のチェック) ...
+    if (!q) return res.status(400).json({ message: "検索ワードが必要です" });
 
     const posts = await Post.find({
       desc: { $regex: q, $options: 'i' }
     })
-    // ▼ これが重要！ ▼
-    // 'author' の部分は、あなたのPostモデルの
-    // ユーザーIDを格納しているフィールド名 (例: 'userId') に合わせてください。
-    // .populate('username', 'profilePicture') // ユーザー情報を結合
-    .sort({ createdAt: -1 })
-    .limit(20);
+      .populate('userId', 'username profilePicture') // ユーザー情報を結合
+      .sort({ createdAt: -1 })
+      .limit(20);
 
     res.json(posts);
-
   } catch (err) {
-    // ... (エラーハンドリング)
+    console.error("Post search error:", err);
     res.status(500).json(err);
   }
 });
@@ -232,9 +284,30 @@ router.post("/:id/comment", async (req, res) => {
     const savedComment = await newComment.save();
 
     // 該当する投稿のコメント数をインクリメント
-    await Post.findByIdAndUpdate(req.params.id, {
+    const post = await Post.findByIdAndUpdate(req.params.id, {
       $inc: { comment: 1 },
     });
+
+    // 通知作成 & 送信 (自分の投稿以外)
+    if (post.userId.toString() !== req.body.userId) {
+      const notification = new Notification({
+        sender: req.body.userId,
+        receiver: post.userId,
+        type: "comment",
+        post: post._id,
+      });
+      await notification.save();
+
+      const io = req.app.get('io');
+      const sender = await User.findById(req.body.userId);
+
+      io.to(post.userId.toString()).emit("getNotification", {
+        senderId: req.body.userId,
+        senderName: sender.username,
+        type: "comment",
+        postId: post._id,
+      });
+    }
 
     return res.status(200).json(savedComment);
   } catch (err) {

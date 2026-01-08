@@ -1,6 +1,6 @@
 import React from 'react'
 import './Home.css'
-import Topbar from '../../components/Topbar/topbar'
+import Topbar from '../../components/Topbar/TopbarMain'
 import Sidebar from '../../components/sidebar/sidebar'
 import Timeline from '../../components/timeline/timeline'
 import Rightbar from '../../components/Rightbar/rightbar'

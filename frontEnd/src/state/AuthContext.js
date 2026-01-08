@@ -58,6 +58,14 @@ export const AuthContextProvider = ({ children }) => {
   // 💾 user の変化を監視して localStorage に保存する
   useEffect(() => {
     localStorage.setItem("user", JSON.stringify(state.user));
+    if (state.user) {
+      document.body.style.backgroundColor = state.user.backgroundColor || "#ffffff";
+      document.body.style.fontFamily = state.user.font || "Arial";
+    } else {
+      // Reset to default if no user is logged in
+      document.body.style.backgroundColor = "#ffffff";
+      document.body.style.fontFamily = "Arial";
+    }
   }, [state.user]);
 
   return (

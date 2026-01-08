@@ -187,4 +187,35 @@
   }
 }
 
+/* Dark Theme Styles */
+.dark-theme .sidebarListItem,
+.dark-theme .sidebarFriend {
+  background-color: #192734;
+  color: #ffffff;
+  box-shadow: none; /* Remove existing shadow */
+  border: 1px solid #38444d;
+}
+
+.dark-theme .sidebarListItem:hover,
+.dark-theme .sidebarFriend:hover {
+  background-color: #253341; /* Slightly lighter on hover */
+}
+
+.dark-theme .sidebarHr {
+  border-color: #38444d;
+}
+
+.dark-theme .userMenu {
+  background: #192734;
+  border-color: #38444d;
+}
+
+.dark-theme .logoutBtn {
+  color: #ffffff;
+}
+
+.dark-theme .logoutBtn:hover {
+  background: #253341;
+}
+
 

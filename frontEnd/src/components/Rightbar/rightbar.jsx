@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import './rightbar.css';
 import axios from 'axios';
+import { AuthContext } from '../../state/AuthContext';
+import { UpdateSuccess } from '../../state/AuthActions';
 
 export default function Rightbar( { user } ) {
   const PUBLIC_FOLDER= process.env.REACT_APP_PUBLIC_FOLDER;
@@ -61,8 +63,39 @@ export default function Rightbar( { user } ) {
   }
   
   const ProfileRightbar = () => {
+    const { user: currentUser, dispatch } = useContext(AuthContext);
+    const [isFollowed, setIsFollowed] = useState(false);
+
+    useEffect(() => {
+      if (currentUser && user && currentUser.following) {
+        setIsFollowed(currentUser.following.includes(user._id));
+      }
+    }, [currentUser, user]);
+
+
+    const handleClick = async () => {
+      try {
+        if (isFollowed) {
+          await axios.put(`/users/${user._id}/unfollow`, { userId: currentUser._id });
+          const newFollowings = currentUser.following.filter(followingId => followingId !== user._id);
+          dispatch(UpdateSuccess({ ...currentUser, following: newFollowings }));
+        } else {
+          await axios.put(`/users/${user._id}/follow`, { userId: currentUser._id });
+          const newFollowings = [...currentUser.following, user._id];
+          dispatch(UpdateSuccess({ ...currentUser, following: newFollowings }));
+        }
+      } catch (err) {
+        console.log(err);
+      }
+    };
+
     return (
       <>
+        {user.username !== currentUser.username && (
+          <button className="rightbarFollowButton" onClick={handleClick}>
+            {isFollowed ? "Unfollow" : "Follow"}
+          </button>
+        )}
         <h4 className="rightbarTitle">User Information</h4>
         <div className="rightbarInfo">
           <div className="rightbarInfoItem">

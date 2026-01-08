@@ -97,6 +97,18 @@ const userSchema = new mongoose.Schema(
     profilePicture: {
       type: String,
     },
+    coverPicture: {
+      type: String,
+      default: "",
+    },
+    backgroundColor: {
+      type: String,
+      default: "#ffffff",
+    },
+    font: {
+      type: String,
+      default: "Arial",
+    },
     // Add fields to store Google OAuth tokens
     accessToken: {
       type: String,

@@ -122,6 +122,49 @@
     }
 
     .topbarRight {
-        flex: 2.0;
+
+            flex: 2.0;
+
+        }
+
     }
-}
+
+    
+
+    /* Dark Theme Styles */
+
+    .dark-theme .topbarContainer {
+
+      background: #192734; /* Solid dark color */
+
+      border-bottom: 1px solid #38444d;
+
+    }
+
+    
+
+    .dark-theme .searchbar {
+
+      background-color: #253341;
+
+    }
+
+    
+
+    .dark-theme .searchInput {
+
+      background-color: transparent;
+
+      color: #ffffff;
+
+    }
+
+    
+
+    .dark-theme .searchIcon {
+
+      color: #8899a6; /* Lighter gray for icon */
+
+    }
+
+    

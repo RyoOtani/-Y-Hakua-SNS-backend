@@ -26,7 +26,9 @@ export default function Bottombar() {
                 <Notifications className='BottombarIcon'/>
             </li>
             <li className="BottombarListItem">
-               <MessageRounded className='BottombarIcon'/>
+               <Link to="/messenger" style={{textDecoration:"none", color:"inherit"}}>
+                    <MessageRounded className='BottombarIcon'/>
+               </Link>
              </li>
             {user && (
             <li className="BottombarListItem">
@@ -36,7 +38,10 @@ export default function Bottombar() {
             </li>
             )}
             <li className="BottombarListItem">
-                <Settings className='BottombarIcon'/>
+
+                <Link to="/setting" style={{textDecoration:"none", color:"inherit"}}>
+                    <Settings className='BottombarIcon'/>
+                </Link>
 
             </li> 
         </div>

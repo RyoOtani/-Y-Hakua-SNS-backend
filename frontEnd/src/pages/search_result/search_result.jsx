@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useLocation, Link } from "react-router-dom";
-import Topbar from "../../components/Topbar/topbar";
+import Topbar from "../../components/Topbar/TopbarMain";
 import Sidebar from "../../components/sidebar/sidebar";
 import Rightbar from "../../components/Rightbar/rightbar";
 import Bottombar from "../../components/bottombar/bottombar";
@@ -33,8 +33,8 @@ function SearchResults() {
     }
     setLoading(true);
     try {
-      const userReq = fetch(`/users/search?q=${encodeURIComponent(q)}`);
-      const postReq = fetch(`/posts/search?q=${encodeURIComponent(q)}`);
+      const userReq = fetch(`/api/users/search?q=${encodeURIComponent(q)}`);
+      const postReq = fetch(`/api/posts/search?q=${encodeURIComponent(q)}`);
       const [userRes, postRes] = await Promise.all([userReq, postReq]);
 
       if (userRes.ok) setUsers(await userRes.json());
@@ -122,9 +122,15 @@ function SearchResults() {
                       <li key={user._id} className="border-b_py-2">
                         <Link to={`/profile/${user.username}`} style={{ display: "flex", alignItems: "center", textDecoration: "none", color: "inherit" }}>
                           <img
-                            src={user.profilePicture ? (PUBLIC_FOLDER + user.profilePicture) : (PUBLIC_FOLDER + "/person/noAvatar.png")}
+                            src={
+                              user.profilePicture
+                                ? user.profilePicture.startsWith("http")
+                                  ? user.profilePicture
+                                  : PUBLIC_FOLDER + (user.profilePicture.startsWith("/assets/") ? user.profilePicture.replace("/assets/", "") : user.profilePicture)
+                                : PUBLIC_FOLDER + "person/noAvatar.png"
+                            }
                             alt=""
-                            style={{ width: 36, height:36, borderRadius: "50%", marginRight: 8 }}
+                            style={{ width: 36, height: 36, borderRadius: "50%", marginRight: 8, objectFit: "cover" }}
                           />
                           <div>
                             <div>{user.name || user.username}</div>

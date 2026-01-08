@@ -1,7 +1,6 @@
 .profileContainer {
     display: flex;
     width: 100%;
-    background-color: rgb(255, 248, 248);
 }
 
 .sidebar {

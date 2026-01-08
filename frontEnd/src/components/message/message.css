@@ -1,0 +1,213 @@
+.message {
+  display: flex;
+  flex-direction: column;
+  margin-top: 20px;
+}
+
+.messageTop {
+  display: flex;
+  align-items: flex-end;
+  /* Align to bottom for chat bubbles */
+}
+
+.messageImg {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-right: 10px;
+  margin-bottom: 5px;
+}
+
+.dark-theme .messageSenderName {
+  color: #8899a6;
+}
+
+.messageContent {
+  display: flex;
+  flex-direction: column;
+  max-width: 95%;
+  /* Increased to 95% for maximum width as requested */
+}
+
+.messageText {
+  padding: 10px 15px;
+  border-radius: 18px;
+  /* Rounded bubbles like standard messengers */
+  background-color: #f1f0f0;
+  /* Light gray for received messages */
+  color: black;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  position: relative;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.message.own .messageText {
+  background-color: #1877f2;
+  /* Messenger blue */
+  color: white;
+  border-bottom-right-radius: 4px;
+  /* Slight corner for own messages */
+}
+
+.message:not(.own) .messageText {
+  border-bottom-left-radius: 4px;
+}
+
+.messageEditedLabel {
+  font-size: 10px;
+  opacity: 0.7;
+  margin-left: 5px;
+  font-style: italic;
+}
+
+.messageMeta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-top: 4px;
+  padding: 0 5px;
+}
+
+.messageTime {
+  font-size: 11px;
+  color: #8e8e8e;
+}
+
+.messageReadStatus {
+  margin-left: 5px;
+  display: flex;
+  align-items: center;
+}
+
+.readIcon {
+  font-size: 14px !important;
+}
+
+.readIcon.read {
+  color: #1877f2;
+}
+
+.readIcon.sent {
+  color: #8e8e8e;
+}
+
+/* Own message alignment */
+.message.own {
+  align-items: flex-end;
+}
+
+.message.own .messageTop {
+  flex-direction: row-reverse;
+}
+
+/* Message Actions */
+.messageActions {
+  display: flex;
+  background-color: rgba(255, 255, 255, 0.9);
+  border-radius: 20px;
+  padding: 2px 5px;
+  margin-right: 10px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  opacity: 0;
+  animation: fadeIn 0.2s forwards;
+}
+
+@keyframes fadeIn {
+  to {
+    opacity: 1;
+  }
+}
+
+.messageActionIcon {
+  color: #65676b;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 50%;
+  transition: background-color 0.2s;
+}
+
+.messageActionIcon:hover {
+  background-color: #f0f2f5;
+}
+
+.messageActionIcon.delete:hover {
+  color: #f02849;
+  background-color: #ffebee;
+}
+
+/* Edit Input */
+.messageEditInputContainer {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.messageEditInput {
+  padding: 5px 10px;
+  border-radius: 15px;
+  border: 1px solid #ddd;
+  outline: none;
+}
+
+.messageEditButton {
+  border: none;
+  border-radius: 5px;
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.messageEditButton.save {
+  background-color: #1877f2;
+  color: white;
+}
+
+.messageEditButton.cancel {
+  background-color: #e4e6eb;
+  color: black;
+}
+
+/* Dark Mode Support */
+.dark-theme .messageText {
+  background-color: #273340;
+  color: white;
+}
+
+.dark-theme .message.own .messageText {
+  background-color: #1877f2;
+}
+
+.dark-theme .messageTime {
+  color: #8899a6;
+}
+
+.dark-theme .messageEditedLabel {
+  color: #8899a6;
+}
+
+.dark-theme .messageActions {
+  background-color: #1c2732;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
+}
+
+.dark-theme .messageActionIcon {
+  color: #8899a6;
+}
+
+.dark-theme .messageActionIcon:hover {
+  background-color: #273340;
+}
+
+.dark-theme .messageEditInput {
+  background-color: #15202b;
+  border: 1px solid #38444d;
+  color: white;
+}
+
+.dark-theme .messageEditButton.cancel {
+  background-color: #38444d;
+  color: white;
+}

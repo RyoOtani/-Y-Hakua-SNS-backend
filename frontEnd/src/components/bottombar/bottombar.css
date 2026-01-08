@@ -39,10 +39,22 @@
     margin-left: 10px;
 }
 
-/* @media screen and (min-width:471px){
-    .Bottombar {
+@media screen and (min-width:471px){
+    .bottombarContainer {
         display: none;
-        position: sticky;
-        bottom: 0;
     }
-} */
+}
+
+/* Dark Theme Styles */
+.dark-theme .bottombarContainer {
+  background-color: #192734;
+  border-top: 1px solid #38444d;
+}
+
+.dark-theme .BottombarListItem {
+  box-shadow: none;
+}
+
+.dark-theme .BottombarIcon {
+  color: #f5f5f5;
+}

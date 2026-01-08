@@ -226,3 +226,41 @@
   overflow-y: auto;
 }
 
+/* Dark Theme Styles */
+.dark-theme .post {
+  background-color: #192734;
+  box-shadow: none;
+  border: 1px solid #38444d;
+}
+
+.dark-theme .postUserName,
+.dark-theme .postDate,
+.dark-theme .postText,
+.dark-theme .postLikeCounter,
+.dark-theme .postCommentText {
+  color: #f5f5f5;
+}
+
+.dark-theme .userMenu {
+  background: #192734;
+  border-color: #38444d;
+}
+
+.dark-theme .logoutBtn {
+  color: #ffffff;
+}
+
+.dark-theme .logoutBtn:hover {
+  background: #253341;
+}
+
+.dark-theme .commentInput {
+  background-color: #253341;
+  border-color: #38444d;
+  color: #f5f5f5;
+}
+
+.dark-theme .commentSubmitButton {
+  background-color: #1da1f2; /* Twitter blue */
+}
+

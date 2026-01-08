@@ -14,11 +14,13 @@
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^13.5.0",
     "axios": "^1.13.2",
+    "browser-image-compression": "^2.0.2",
     "jwt-decode": "^4.0.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-router-dom": "^7.9.5",
     "react-scripts": "5.0.1",
+    "socket.io-client": "^4.7.5",
     "styled-components": "^6.1.19",
     "timeago.js": "^4.0.2",
     "web-vitals": "^2.1.4"
@@ -47,5 +49,5 @@
       "last 1 safari version"
     ]
   },
-  "proxy": "http://localhost:8800/api/"
+  "proxy": "http://localhost:8800"
 }

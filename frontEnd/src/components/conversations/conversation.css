@@ -1,0 +1,128 @@
+.conversation {
+  display: flex;
+  align-items: center;
+  padding: 10px;
+  cursor: pointer;
+  border-radius: 10px;
+  transition: background-color 0.2s;
+}
+
+.conversation:hover {
+  background-color: #f5f5f5;
+}
+
+.conversation.unread {
+  background-color: #e8f0fe;
+}
+
+.conversationWrapper {
+  display: flex;
+  width: 100%;
+  align-items: center;
+}
+
+.conversationImgContainer {
+  position: relative;
+  margin-right: 15px;
+}
+
+.conversationImg {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.conversationInfo {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  /* For text truncation */
+}
+
+.conversationTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.conversationName {
+  font-weight: 500;
+  font-size: 15px;
+}
+
+.conversationName.unreadText {
+  font-weight: 700;
+  color: #1a1a1a;
+}
+
+.conversationTime {
+  font-size: 11px;
+  color: #5f6368;
+}
+
+.conversationBottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.conversationLastMessage {
+  font-size: 13px;
+  color: #5f6368;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+  margin: 0;
+}
+
+.conversationLastMessage.unreadText {
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.conversationUnreadBadge {
+  background-color: #d93025;
+  color: white;
+  font-size: 11px;
+  font-weight: bold;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 5px;
+}
+
+/* Dark Mode Support */
+.dark-theme .conversation:hover {
+  background-color: #273340;
+}
+
+.dark-theme .conversation.unread {
+  background-color: #1c2732;
+}
+
+.dark-theme .conversationName {
+  color: white;
+}
+
+.dark-theme .conversationName.unreadText {
+  color: white;
+}
+
+.dark-theme .conversationTime {
+  color: #8899a6;
+}
+
+.dark-theme .conversationLastMessage {
+  color: #8899a6;
+}
+
+.dark-theme .conversationLastMessage.unreadText {
+  color: white;
+}
