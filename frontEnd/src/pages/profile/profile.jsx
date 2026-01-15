@@ -1,8 +1,10 @@
-import React, { useEffect, useState } from 'react'
-import Topbar from '../../components/Topbar/TopbarMain'
+import React, { useEffect, useState, useContext } from 'react'
+import { AuthContext } from '../../state/AuthContext';
+import { UpdateSuccess } from '../../state/AuthActions';
+import Topbar from '../../components/topbar/topbarMain'
 import Sidebar from '../../components/sidebar/sidebar'
 import Timeline from '../../components/timeline/timeline'
-import Rightbar from '../../components/Rightbar/rightbar'
+import Rightbar from '../../components/rightbar/rightbar'
 import './profile.css'
 import axios from 'axios'
 import { useParams } from 'react-router-dom'
@@ -22,6 +24,32 @@ export default function Profile() {
     }
     fetchUser();
   }, [username]);
+
+  const { user: currentUser, dispatch } = useContext(AuthContext);
+  const [isFollowed, setIsFollowed] = useState(false);
+
+  useEffect(() => {
+    if (currentUser && user && currentUser.following) {
+      setIsFollowed(currentUser.following.includes(user._id));
+    }
+  }, [currentUser, user]);
+
+  const handleClick = async () => {
+    try {
+      if (isFollowed) {
+        await axios.put(`/api/users/${user._id}/unfollow`, { userId: currentUser._id });
+        const newFollowings = currentUser.following.filter(followingId => followingId !== user._id);
+        dispatch(UpdateSuccess({ ...currentUser, following: newFollowings }));
+      } else {
+        await axios.put(`/api/users/${user._id}/follow`, { userId: currentUser._id });
+        const newFollowings = [...currentUser.following, user._id];
+        dispatch(UpdateSuccess({ ...currentUser, following: newFollowings }));
+      }
+      setIsFollowed(!isFollowed);
+    } catch (err) {
+      console.log(err);
+    }
+  };
 
   return (
     <>
@@ -50,8 +78,18 @@ export default function Profile() {
                 alt="" className="profileUserImg" />
             </div>
             <div className="profileInfo">
-              <h4 className="profileInfoName">{user.username}</h4>
-              <span className="profileInfoDesc">{user.desc}</span>
+              <div className="profileNameWrapper">
+                <h4 className="profileInfoName">{user.username}</h4>
+                {user.username !== currentUser.username && (
+                  <button
+                    className={`followButton ${isFollowed ? "followed" : ""}`}
+                    onClick={handleClick}
+                  >
+                    {isFollowed ? "Unfollow" : "Follow"}
+                  </button>
+                )}
+                <span className="profileInfoDesc">{user.desc}</span>
+              </div>
             </div>
           </div>
           <div className="profileRightBottom">

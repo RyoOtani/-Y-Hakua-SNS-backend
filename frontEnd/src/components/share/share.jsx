@@ -6,7 +6,7 @@ import axios from 'axios';
 import imageCompression from 'browser-image-compression';
 
 export default function Share() {
-    const PUBLIC_FOLDER = process.env.REACT_APP_PUBLIC_FOLDER;
+    const PUBLIC_FOLDER = process.env.REACT_APP_PUBLIC_FOLDER || "/assets/";
     const { user } = useContext(AuthContext);
     const desc = useRef();
     const [file, setFile] = useState(null);
@@ -25,7 +25,15 @@ export default function Share() {
             data.append("file", file);
             try {
                 const res = await axios.post("/api/upload?type=post", data);
-                newPost.img = res.data.filePath;
+                // Assign to correct field based on mime type
+                if (file.type.startsWith("video/")) {
+                    newPost.video = res.data.filePath;
+                } else if (file.type.startsWith("image/")) {
+                    newPost.img = res.data.filePath;
+                } else {
+                    newPost.file = res.data.filePath;
+                    // Store filename potentially in desc or separate field if needed, currently just URL
+                }
             } catch (err) {
                 console.error("Upload failed", err);
                 alert("画像のアップロードに失敗しました");
@@ -68,7 +76,15 @@ export default function Share() {
                         <hr className="shareHr" />
                         {file && (
                             <div className="shareImgContainer">
-                                <img src={URL.createObjectURL(file)} alt="" className='shareImg' />
+                                {file.type.startsWith("image/") ? (
+                                    <img src={URL.createObjectURL(file)} alt="" className='shareImg' />
+                                ) : file.type.startsWith("video/") ? (
+                                    <video src={URL.createObjectURL(file)} controls playsInline className='shareImg' />
+                                ) : (
+                                    <div className="shareFilePreview">
+                                        <span role="img" aria-label="file">📄</span> {file.name}
+                                    </div>
+                                )}
                                 <Cancel className='shareCancelImg' onClick={() => setFile(null)} />
                             </div>
                         )}
@@ -83,31 +99,35 @@ export default function Share() {
                                     </span>
                                     <input type="file"
                                         id="file"
-                                        accept=".png, .jpeg, .jpg"
+                                        accept=".png, .jpeg, .jpg, .gif, .mp4, .mov, .avi, .webm, .pdf, .doc, .docx, .zip, .txt"
                                         style={{ display: "none" }}
                                         onChange={async (e) => {
                                             const originalFile = e.target.files[0];
                                             if (!originalFile) return;
 
-                                            // 1. 直ちにプレビューを表示（元ファイルを使用）
+                                            // Check for 100MB limit
+                                            if (originalFile.size > 100 * 1024 * 1024) {
+                                                alert("ファイルサイズは100MB以下にしてください。");
+                                                e.target.value = ""; // Clear the input
+                                                return;
+                                            }
+
                                             setFile(originalFile);
 
-                                            // 2. バックグラウンドで圧縮を試行
-                                            const options = {
-                                                maxSizeMB: 0.5, // 500KB
-                                                maxWidthOrHeight: 1920,
-                                                useWebWorker: true,
-                                            };
-
-                                            try {
-                                                const compressedFile = await imageCompression(originalFile, options);
-                                                // 圧縮成功ならファイルを差し替え
-                                                const renamedFile = new File([compressedFile], originalFile.name, { type: compressedFile.type });
-                                                setFile(renamedFile);
-                                                console.log(`Compression successful: ${originalFile.size / 1024 / 1024}MB -> ${renamedFile.size / 1024 / 1024}MB`);
-                                            } catch (error) {
-                                                console.error("Compression failed or skipped:", error);
-                                                // 失敗しても元ファイルがセットされているので問題なし
+                                            // Only compress images
+                                            if (originalFile.type.startsWith("image/")) {
+                                                const options = {
+                                                    maxSizeMB: 0.5,
+                                                    maxWidthOrHeight: 1920,
+                                                    useWebWorker: true,
+                                                };
+                                                try {
+                                                    const compressedFile = await imageCompression(originalFile, options);
+                                                    const renamedFile = new File([compressedFile], originalFile.name, { type: compressedFile.type });
+                                                    setFile(renamedFile);
+                                                } catch (error) {
+                                                    console.error("Compression failed:", error);
+                                                }
                                             }
                                         }}
                                         name="file"

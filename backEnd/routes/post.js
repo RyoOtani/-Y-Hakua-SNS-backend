@@ -3,12 +3,18 @@ const Post = require("../models/Post");
 const User = require("../models/User");
 const Comment = require("../models/Comment");
 const Notification = require("../models/Notification");
+const { saveHashtags } = require("./hashtag");
 
 //create a post
 router.post("/", async (req, res) => {
   const newPost = new Post(req.body);
   try {
     const savedPost = await newPost.save();
+
+    // Extract and save hashtags from the post description
+    if (req.body.desc) {
+      await saveHashtags(req.body.desc);
+    }
 
     // 投稿者のフォロワーを取得して通知を送る
     const user = await User.findById(req.body.userId);
@@ -280,6 +286,7 @@ router.post("/:id/comment", async (req, res) => {
       postId: req.params.id,
       userId: req.body.userId,
       desc: req.body.desc,
+      img: req.body.img,
     });
     const savedComment = await newComment.save();
 
@@ -323,6 +330,32 @@ router.get("/:id/comments", async (req, res) => {
       .sort({ createdAt: -1 });
     res.status(200).json(comments);
   } catch (err) {
+    res.status(500).json(err);
+  }
+});
+
+// コメントを削除する
+router.delete("/:id/comment/:commentId", async (req, res) => {
+  try {
+    const comment = await Comment.findById(req.params.commentId);
+    if (!comment) return res.status(404).json("コメントが見つかりません");
+
+    // 削除権限の確認: コメント投稿者のみ
+    // 将来的にはPost投稿者も削除できるように拡張可能
+    if (comment.userId.toString() === req.body.userId) {
+      await comment.deleteOne();
+
+      // 該当する投稿のコメント数をデクリメント
+      await Post.findByIdAndUpdate(req.params.id, {
+        $inc: { comment: -1 },
+      });
+
+      res.status(200).json("コメントが削除されました");
+    } else {
+      res.status(403).json("自分のコメントのみ削除できます");
+    }
+  } catch (err) {
+    console.error("Delete comment error:", err);
     res.status(500).json(err);
   }
 });

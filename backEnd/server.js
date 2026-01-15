@@ -158,6 +158,7 @@ app.use('/api/upload', require('./routes/upload'));
 app.use('/api/conversations', require('./routes/conversation'));
 app.use('/api/messages', require('./routes/message'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/hashtags', require('./routes/hashtag'));
 
 // サーバー起動
 const PORT = process.env.PORT || 8800;

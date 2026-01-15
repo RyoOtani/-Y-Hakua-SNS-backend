@@ -57,8 +57,8 @@ router.get("/:id/settings", async (req, res) => {
     if (!user) {
       return res.status(404).json("ユーザーが見つかりません。");
     }
-    const { backgroundColor, font, coverPicture } = user;
-    res.status(200).json({ backgroundColor, font, coverPicture });
+    const { backgroundColor, font, coverPicture, desc } = user;
+    res.status(200).json({ backgroundColor, font, coverPicture, desc });
   } catch (err) {
     res.status(500).json(err);
   }
@@ -77,6 +77,7 @@ router.put("/:id/settings", passport.authenticate('jwt', { session: false }), as
         backgroundColor: req.body.backgroundColor,
         font: req.body.font,
         coverPicture: req.body.coverPicture,
+        desc: req.body.desc,
       },
     });
     res.status(200).json("設定が更新されました。");
@@ -281,7 +282,7 @@ router.get("/me", passport.authenticate('jwt', { session: false }), (req, res) =
   res.status(200).json(other);
 });
 
-//get friends
+//get friends (following list)
 router.get("/friends/:userId", async (req, res) => {
   try {
     const user = await User.findById(req.params.userId);
@@ -312,6 +313,59 @@ router.get("/friends/:userId", async (req, res) => {
   } catch (err) {
     console.error("Friends fetch error:", err);
     res.status(500).json({ error: "フレンド取得に失敗しました" });
+  }
+});
+
+// get followers list
+router.get("/followers/:userId", async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId);
+
+    if (!user) {
+      return res.status(404).json({ error: "ユーザーが見つかりません" });
+    }
+
+    if (!user.followers || user.followers.length === 0) {
+      return res.status(200).json([]);
+    }
+
+    const followers = await Promise.all(
+      user.followers.map((followerId) => {
+        return User.findById(followerId);
+      })
+    );
+
+    let followerList = [];
+    followers.forEach((follower) => {
+      if (follower) {
+        const { _id, username, profilePicture } = follower;
+        followerList.push({ _id, username, profilePicture });
+      }
+    });
+    res.status(200).json(followerList);
+  } catch (err) {
+    console.error("Followers fetch error:", err);
+    res.status(500).json({ error: "フォロワー取得に失敗しました" });
+  }
+});
+
+// プライバシーポリシー
+router.put("/:id/agree-privacy", passport.authenticate('jwt', { session: false }), async (req, res) => {
+  if (req.user._id.toString() !== req.params.id) {
+    return res.status(403).json("自分のアカウントのみ更新できます。");
+  }
+
+  try {
+    const updatedUser = await User.findByIdAndUpdate(
+      req.params.id,
+      { $set: { hasAgreedToPrivacyPolicy: true } },
+      { new: true }
+    );
+    const { password, updatedAt, ...other } = updatedUser._doc;
+    res.status(200).json(other);
+  } catch (err) {
+    console.error("Privacy Policy Agreement Error:", err);
+    res.status(500).json(err);
   }
 });
 

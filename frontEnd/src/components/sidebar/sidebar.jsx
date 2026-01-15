@@ -1,4 +1,4 @@
-import { Home, Notifications, MessageRounded, Bookmark, Person, Settings, MoreVert } from '@mui/icons-material'
+import { Home, Notifications, MessageRounded, Person, Settings, MoreVert, TrendingUp } from '@mui/icons-material'
 import React, { useContext, useState, useRef, useEffect } from 'react'
 import './sidebar.css'
 import { Link, useNavigate } from 'react-router-dom'
@@ -6,7 +6,7 @@ import { AuthContext } from '../../state/AuthContext';
 import axios from 'axios';
 
 export default function Sidebar() {
-    const PUBLIC_FOLDER = process.env.REACT_APP_PUBLIC_FOLDER;
+    const PUBLIC_FOLDER = process.env.REACT_APP_PUBLIC_FOLDER || "/assets/";
     const { user, dispatch } = useContext(AuthContext);
     const [showMenu, setShowMenu] = useState(false);
     const navigate = useNavigate();
@@ -84,10 +84,12 @@ export default function Sidebar() {
                         </Link>
                     </li>
                     <li className="sidebarListItem">
-                        <Bookmark className='sidebarIcon' />
-                        <span className='sidebarListItemText'>
-                            Bookmarks
-                        </span>
+                        <Link to="/ranking" style={{ textDecoration: "none", color: "inherit", display: "flex", alignItems: "center", width: "100%" }}>
+                            <TrendingUp className='sidebarIcon' />
+                            <span className='sidebarListItemText'>
+                                Ranking
+                            </span>
+                        </Link>
                     </li>
                     {user && (
                         <li className="sidebarListItem">

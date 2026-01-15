@@ -1,7 +1,7 @@
 import React, { useContext, useEffect, useState } from "react";
 import "./setting.css";
 import Sidebar from "../../components/sidebar/sidebar";
-import Topbar from "../../components/Topbar/TopbarMain";
+import Topbar from "../../components/topbar/topbarMain";
 import Bottombar from "../../components/bottombar/bottombar";
 import { AuthContext } from "../../state/AuthContext";
 import axios from "axios";
@@ -14,20 +14,51 @@ const themeColors = {
 
 export default function Setting() {
   const { user: currentUser, dispatch } = useContext(AuthContext);
-  const PUBLIC_FOLDER = process.env.REACT_APP_PUBLIC_FOLDER;
+  const PUBLIC_FOLDER = process.env.REACT_APP_PUBLIC_FOLDER || "/assets/";
 
   // State for theme name ('light' or 'dark')
   const [theme, setTheme] = useState(
     currentUser.backgroundColor === themeColors.dark ? "dark" : "light"
   );
   const [font, setFont] = useState(currentUser.font || "Arial");
+  const [desc, setDesc] = useState(currentUser.desc || "");
   const [coverPicture, setCoverPicture] = useState(null);
   const [coverPicturePreview, setCoverPicturePreview] = useState(
     currentUser.coverPicture
   );
 
-  // The global theme application is now handled in App.js
-  // No need for a useEffect here anymore.
+  // Preview the theme immediately when the user changes it in the dropdown
+  useEffect(() => {
+    // Apply preview
+    document.body.style.backgroundColor = themeColors[theme];
+    if (theme === "dark") {
+      document.body.classList.add("dark-theme");
+    } else {
+      document.body.classList.remove("dark-theme");
+    }
+
+    // Cleanup: revert to the actual user's saved theme if the component unmounts
+    // or if the selection changes (the next effect call will apply the new preview)
+    return () => {
+      const savedTheme = (currentUser?.backgroundColor || "").toLowerCase() === themeColors.dark.toLowerCase() ? "dark" : "light";
+      document.body.style.backgroundColor = currentUser?.backgroundColor || themeColors.light;
+      if (savedTheme === "dark") {
+        document.body.classList.add("dark-theme");
+      } else {
+        document.body.classList.remove("dark-theme");
+      }
+    };
+  }, [theme, currentUser?.backgroundColor]);
+
+  // Synchronize local state when currentUser changes (e.g., after fresh fetch in App.js)
+  useEffect(() => {
+    if (currentUser) {
+      setTheme(currentUser.backgroundColor === themeColors.dark ? "dark" : "light");
+      setFont(currentUser.font || "Arial");
+      setDesc(currentUser.desc || "");
+      setCoverPicturePreview(currentUser.coverPicture);
+    }
+  }, [currentUser]);
 
   const handleFileChange = (e) => {
     const file = e.target.files[0];
@@ -36,6 +67,30 @@ export default function Setting() {
       setCoverPicturePreview(URL.createObjectURL(file));
     }
   };
+
+  const [followers, setFollowers] = useState([]);
+  const [followings, setFollowings] = useState([]);
+  const [showFollowers, setShowFollowers] = useState(false);
+  const [showFollowings, setShowFollowings] = useState(false);
+
+  // Fetch followers and followings
+  useEffect(() => {
+    const fetchFollowLists = async () => {
+      try {
+        const [followersRes, followingsRes] = await Promise.all([
+          axios.get("/api/users/followers/" + currentUser._id),
+          axios.get("/api/users/friends/" + currentUser._id),
+        ]);
+        setFollowers(followersRes.data);
+        setFollowings(followingsRes.data);
+      } catch (err) {
+        console.error("Error fetching follow lists:", err);
+      }
+    };
+    if (currentUser._id) {
+      fetchFollowLists();
+    }
+  }, [currentUser._id]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -65,6 +120,7 @@ export default function Setting() {
       backgroundColor: themeColors[theme], // Save the hex color
       font,
       coverPicture: coverPictureUrl,
+      desc,
     };
 
     try {
@@ -80,6 +136,7 @@ export default function Setting() {
           backgroundColor: themeColors[theme],
           font,
           coverPicture: coverPictureUrl,
+          desc,
         })
       );
       alert("設定が更新されました！");
@@ -100,6 +157,17 @@ export default function Setting() {
             <span className="settingsUpdateTitle">Setting</span>
           </div>
           <form className="settingsForm" onSubmit={handleSubmit}>
+            <div className="settingsOption">
+              <label>自己紹介文 (最大50文字):</label>
+              <input
+                type="text"
+                maxLength="50"
+                className="settingsDescInput"
+                placeholder="一言コメントを入力..."
+                value={desc}
+                onChange={(e) => setDesc(e.target.value)}
+              />
+            </div>
             <div className="settingsOption">
               <label>テーマ:</label>
               <select value={theme} onChange={(e) => setTheme(e.target.value)}>
@@ -149,6 +217,91 @@ export default function Setting() {
               更新
             </button>
           </form>
+
+          <hr className="settingsHr" />
+
+          <div className="settingsLogout">
+            <h3 className="settingsLogoutTitle">アカウント詳細</h3>
+
+            <div className="settingsFollowButtons">
+              <button
+                type="button"
+                className={`settingsToggleButton ${showFollowings ? 'active' : ''}`}
+                onClick={() => setShowFollowings(!showFollowings)}
+              >
+                フォロー中 ({followings.length})
+              </button>
+              <button
+                type="button"
+                className={`settingsToggleButton ${showFollowers ? 'active' : ''}`}
+                onClick={() => setShowFollowers(!showFollowers)}
+              >
+                フォロワー ({followers.length})
+              </button>
+            </div>
+
+            <div className="settingsFollowSection">
+              {showFollowings && (
+                <div className="settingsFollowListContainer">
+                  <h4>フォロー中</h4>
+                  <div className="settingsFollowList">
+                    {followings.length === 0 ? (
+                      <p className="noFollows">フォロー中のユーザーはいません。</p>
+                    ) : (
+                      followings.map((f) => (
+                        <a href={`/profile/${f.username}`} key={f._id} className="settingsFollowItem">
+                          <img
+                            src={f.profilePicture ? f.profilePicture : PUBLIC_FOLDER + "person/noAvatar.png"}
+                            alt=""
+                            className="settingsFollowImg"
+                          />
+                          <span className="settingsFollowName">{f.username}</span>
+                        </a>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {showFollowers && (
+                <div className="settingsFollowListContainer">
+                  <h4>フォロワー</h4>
+                  <div className="settingsFollowList">
+                    {followers.length === 0 ? (
+                      <p className="noFollows">フォロワーはいません。</p>
+                    ) : (
+                      followers.map((f) => (
+                        <a href={`/profile/${f.username}`} key={f._id} className="settingsFollowItem">
+                          <img
+                            src={f.profilePicture ? f.profilePicture : PUBLIC_FOLDER + "person/noAvatar.png"}
+                            alt=""
+                            className="settingsFollowImg"
+                          />
+                          <span className="settingsFollowName">{f.username}</span>
+                        </a>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <button className="settingsLogoutButton" onClick={async () => {
+              try {
+                await axios.get("/api/auth/logout");
+                localStorage.removeItem("token");
+                delete axios.defaults.headers.common["Authorization"];
+                if (dispatch) {
+                  dispatch({ type: "LOGOUT" });
+                }
+                window.location.href = "/login";
+              } catch (err) {
+                console.error(err);
+              }
+            }}>
+              ログアウト
+            </button>
+          </div>
         </div>
       </div>
       <Bottombar />

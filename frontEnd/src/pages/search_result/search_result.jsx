@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { useLocation, Link } from "react-router-dom";
-import Topbar from "../../components/Topbar/TopbarMain";
+import Topbar from "../../components/topbar/topbarMain";
 import Sidebar from "../../components/sidebar/sidebar";
-import Rightbar from "../../components/Rightbar/rightbar";
+import Rightbar from "../../components/rightbar/rightbar";
 import Bottombar from "../../components/bottombar/bottombar";
 import Post from "../../components/post/post";
 import './search_result.css'

@@ -32,7 +32,10 @@ import PrivateRoute from './components/PrivateRoute';
 import Setting from './pages/setting/setting';
 import Messenger from './pages/messenger/Messenger'; // Import Messenger component
 import Notification from './pages/notification/notification';
+import PrivacyPolicy from './pages/privacyPolicy/PrivacyPolicy';
+import Ranking from './pages/ranking/ranking';
 import { useEffect } from 'react';
+
 
 import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
 import { useContext } from 'react';
@@ -42,6 +45,8 @@ import axios from 'axios';
 
 function App() {
   const { user, dispatch } = useContext(AuthContext);
+
+  const needsPrivacyAgreement = user && !user.hasAgreedToPrivacyPolicy;
 
   const themeColors = {
     light: "#ffffff",
@@ -73,7 +78,7 @@ function App() {
   useEffect(() => {
     if (user) {
       const theme =
-        user.backgroundColor === themeColors.dark ? "dark" : "light";
+        (user.backgroundColor || "").toLowerCase() === themeColors.dark.toLowerCase() ? "dark" : "light";
       document.body.style.backgroundColor = user.backgroundColor || themeColors.light;
       document.body.style.fontFamily = user.font || "Arial";
 
@@ -91,27 +96,105 @@ function App() {
         {/* 保護されたルート */}
         <Route
           path="/"
-          element={user ? <Home /> : <Navigate to="/login" />}
+          element={
+            user ? (
+              needsPrivacyAgreement ? (
+                <Navigate to="/privacy-policy" />
+              ) : (
+                <Home />
+              )
+            ) : (
+              <Navigate to="/login" />
+            )
+          }
         />
         <Route
           path="/profile/:username"
-          element={user ? <Profile /> : <Navigate to={"/login"} />}
+          element={
+            user ? (
+              needsPrivacyAgreement ? (
+                <Navigate to="/privacy-policy" />
+              ) : (
+                <Profile />
+              )
+            ) : (
+              <Navigate to={"/login"} />
+            )
+          }
         />
         <Route
           path="/search"
-          element={user ? <SearchResults /> : <Navigate to={"/login"} />}
+          element={
+            user ? (
+              needsPrivacyAgreement ? (
+                <Navigate to="/privacy-policy" />
+              ) : (
+                <SearchResults />
+              )
+            ) : (
+              <Navigate to={"/login"} />
+            )
+          }
         />
         <Route
           path="/setting"
-          element={user ? <Setting /> : <Navigate to={"/login"} />}
+          element={
+            user ? (
+              needsPrivacyAgreement ? (
+                <Navigate to="/privacy-policy" />
+              ) : (
+                <Setting />
+              )
+            ) : (
+              <Navigate to={"/login"} />
+            )
+          }
         />
         <Route
           path="/messenger"
-          element={user ? <Messenger /> : <Navigate to={"/login"} />}
+          element={
+            user ? (
+              needsPrivacyAgreement ? (
+                <Navigate to="/privacy-policy" />
+              ) : (
+                <Messenger />
+              )
+            ) : (
+              <Navigate to={"/login"} />
+            )
+          }
         />
         <Route
           path="/notifications"
-          element={user ? <Notification /> : <Navigate to={"/login"} />}
+          element={
+            user ? (
+              needsPrivacyAgreement ? (
+                <Navigate to="/privacy-policy" />
+              ) : (
+                <Notification />
+              )
+            ) : (
+              <Navigate to={"/login"} />
+            )
+          }
+        />
+        <Route
+          path="/privacy-policy"
+          element={user ? <PrivacyPolicy /> : <Navigate to="/login" />}
+        />
+        <Route
+          path="/ranking"
+          element={
+            user ? (
+              needsPrivacyAgreement ? (
+                <Navigate to="/privacy-policy" />
+              ) : (
+                <Ranking />
+              )
+            ) : (
+              <Navigate to="/login" />
+            )
+          }
         />
 
         {/* 公開ルート */}

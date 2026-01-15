@@ -28,7 +28,8 @@
 }
 
 .dark-theme .commentUsername {
-  color: #e4e6eb; /* Light text for username in dark mode */
+    color: #e4e6eb;
+    /* Light text for username in dark mode */
 }
 
 .commentDate {
@@ -37,7 +38,8 @@
 }
 
 .dark-theme .commentDate {
-  color: #b0b3b8; /* Lighter grey for date in dark mode */
+    color: #b0b3b8;
+    /* Lighter grey for date in dark mode */
 }
 
 .commentDesc {
@@ -51,6 +53,18 @@
 }
 
 .dark-theme .commentDesc {
-  background-color: #2e2b2b; /* Even darker background for comment text in dark mode */
-  color: #e4e6eb; /* Light text for comment description in dark mode */
+    background-color: #2e2b2b;
+    /* Even darker background for comment text in dark mode */
+    color: #e4e6eb;
+    /* Light text for comment description in dark mode */
+}
+
+.commentImg {
+    max-width: 200px;
+    max-height: 200px;
+    border-radius: 10px;
+    margin-top: 5px;
+    display: block;
+    cursor: pointer;
+    object-fit: cover;
 }

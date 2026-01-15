@@ -294,16 +294,216 @@
   color: #8899a6;
 }
 
+/* Mobile View Toggle Styles */
+.chatHeaderMobileBack {
+  display: none;
+  margin-right: 15px;
+}
+
+.chatBackIcon {
+  cursor: pointer;
+  color: #1877f2;
+}
+
+.dark-theme .chatBackIcon {
+  color: #e4e6eb;
+}
+
+.bottombar {
+  display: none;
+  position: sticky;
+  bottom: 0;
+  z-index: 999;
+}
+
 @media screen and (max-width: 768px) {
-  .chatMenu {
-    flex: 1;
+  .messengerContainer {
+    height: calc(100vh - 100px);
   }
 
-  .chatMenuInput {
+  .messengerSidebar {
     display: none;
   }
 
-  .chatBox {
-    flex: 10;
+  .messenger {
+    flex: 1;
+    width: 100%;
   }
+
+  .bottombar {
+    display: block;
+  }
+
+  .chatMenu {
+    flex: 1;
+    width: 100%;
+  }
+
+  /* モバイルでも検索できるようにする */
+  .chatMenuInput {
+    display: block;
+    width: 100%;
+    margin-bottom: 10px;
+  }
+
+  .chatBox {
+    flex: 1;
+    width: 100%;
+  }
+
+  .hidden-mobile {
+    display: none !important;
+  }
+
+  .chatHeaderMobileBack {
+    display: flex;
+    align-items: center;
+    position: absolute;
+    left: 15px;
+  }
+}
+
+/* Refresh Button Styles (matching Timeline) */
+.chatBoxRefresh {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 10px 0;
+  background-color: white;
+  border-bottom: 1px solid #e0e0e0;
+  position: relative;
+}
+
+.chatRefreshButton {
+  display: flex;
+  align-items: center;
+  background-color: white;
+  padding: 6px 14px;
+  border-radius: 20px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #1877f2;
+}
+
+.chatRefreshButton:hover {
+  background-color: #f0f2f5;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+}
+
+.chatRefreshButton:active {
+  transform: translateY(0);
+}
+
+.chatRefreshIcon {
+  margin-right: 5px;
+  font-size: 18px !important;
+}
+
+.chatRefreshText {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* Refresh Animation */
+.chatRefreshButton.refreshing .chatRefreshIcon {
+  animation: chatRotate 1s linear infinite;
+}
+
+@keyframes chatRotate {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Dark Theme Styles for Refresh Button */
+.dark-theme .chatBoxRefresh {
+  background-color: #15202b;
+  border-bottom: 1px solid #38444d;
+}
+
+.dark-theme .chatRefreshButton {
+  background-color: #192734;
+  color: #1da1f2;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+  border: 1px solid #38444d;
+}
+
+.dark-theme .chatRefreshButton:hover {
+  background-color: #253341;
+}
+
+/* File Attachment Styles */
+.chatFilePreviewContainer {
+  padding: 10px;
+  border-top: 1px solid #ccc;
+  display: flex;
+  align-items: center;
+  background-color: #f0f2f5;
+  position: relative;
+  border-left: 1px solid #ddd;
+  border-right: 1px solid #ddd;
+}
+
+.chatFilePreviewImg {
+  max-height: 100px;
+  max-width: 200px;
+  border-radius: 5px;
+  margin-right: 10px;
+  object-fit: contain;
+}
+
+.chatFilePreview {
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+}
+
+.chatFileCancel {
+  cursor: pointer;
+  color: #ff3b30;
+  margin-left: auto;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 50%;
+}
+
+.chatFileLabel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 10px;
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 50%;
+  color: #0084ff;
+  transition: background-color 0.2s;
+}
+
+.chatFileLabel:hover {
+  background-color: #e4e6eb;
+}
+
+.chatFileIcon {
+  font-size: 24px !important;
+}
+
+/* Dark Theme Adjustments */
+.dark-theme .chatFilePreviewContainer {
+  background-color: #192734;
+  border-top-color: #38444d;
+  border-left-color: #38444d;
+  border-right-color: #38444d;
+}
+
+.dark-theme .chatFilePreview {
+  color: #e4e6eb;
+}
+
+.dark-theme .chatFileLabel:hover {
+  background-color: #253341;
 }

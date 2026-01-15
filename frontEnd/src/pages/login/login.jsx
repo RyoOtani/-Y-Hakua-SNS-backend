@@ -54,7 +54,7 @@
 //   }
 
 //   console.log(user);
-  
+
 //   return (
 //     <div className='login'>
 //       <div className="loginWrapper">
@@ -88,9 +88,9 @@
 //               ref={password}
 //             />
 //             <button className="loginButton">Login</button>
-            
+
 //             <button className="loginRegisterButton">Register</button> */}
-            
+
 //           </form>          
 //         </div>
 //       </div>
@@ -114,7 +114,7 @@ export default function Login() {
     // バックエンドのGoogle OAuth認証URLにリダイレクト
     window.location.href = `${process.env.REACT_APP_API_URL}/auth/google`;
   };
-  
+
   return (
     <div className='login'>
       <div className="loginWrapper">
@@ -135,33 +135,22 @@ export default function Login() {
               onClick={handleGoogleLogin}
               startIcon={<GoogleIcon />}
               sx={{
-              backgroundColor: '#1f2937',
-                '&:hover': { backgroundColor: '#111827' },
+                backgroundColor: '#ffffff',
+                color: '#000000',
+                '&:hover': {
+                  backgroundColor: '#f1f1f1',
+                },
                 textTransform: 'none',
-              fontSize: '1rem',
-              padding: '12px',
-            }}
-            >Googleでログイン</Button>
-            {/* <input 
-              type="email" 
-              placeholder='Email' 
-              className="loginInput" 
-              required
-              ref={email}
-            />
-            <input 
-              placeholder='Password' 
-              className="loginInput" 
-              type="password" 
-              minLength="6"
-              required
-              ref={password}
-            />
-            <button className="loginButton">Login</button>
-            
-            <button className="loginRegisterButton">Register</button> */}
-            
-          </form>          
+                fontSize: '1rem',
+                fontWeight: 600,
+                padding: '12px',
+                borderRadius: '30px',
+              }}
+            >
+              Googleでログイン
+            </Button>
+
+          </form>
         </div>
       </div>
     </div>

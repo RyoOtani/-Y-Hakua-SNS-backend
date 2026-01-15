@@ -2,14 +2,15 @@ import React, { useContext, useEffect, useState, useRef } from 'react'
 import axios from 'axios'
 import './post.css'
 //import { ChatBubbleOutline, FavoriteOutlined, LinkRounded, MoreVert } from '@mui/icons-material'
-import { ChatBubbleOutline, FavoriteOutlined, MoreVert } from '@mui/icons-material'
+import { ChatBubbleOutline, FavoriteOutlined, MoreVert, AttachFile, Cancel } from '@mui/icons-material'
 import { format } from 'timeago.js';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../../state/AuthContext';
 import Comment from '../comment/Comment'; // Commentコンポーネントをインポート
+import imageCompression from 'browser-image-compression';
 
 export default function Post({ post }) {
-    const PUBLIC_FOLDER = process.env.REACT_APP_PUBLIC_FOLDER;
+    const PUBLIC_FOLDER = process.env.REACT_APP_PUBLIC_FOLDER || "/assets/";
     const [likes, setLikes] = React.useState(post.likes.length);
     const [isLiked, setIsLiked] = React.useState(false);
     const { user: currentUser } = useContext(AuthContext);
@@ -17,8 +18,37 @@ export default function Post({ post }) {
     const menuRef = useRef(null);
     const [showComments, setShowComments] = useState(false); // コメント表示用のstate
     const [commentText, setCommentText] = useState(""); // コメント入力用
+    const [commentFile, setCommentFile] = useState(null); // コメント画像用
     const [commentCount, setCommentCount] = useState(post.comment); // コメント数用
     const [comments, setComments] = useState([]); // コメントリスト用
+    const navigate = useNavigate();
+
+    // Helper function to render text with clickable hashtags
+    const renderTextWithHashtags = (text) => {
+        if (!text) return null;
+        // Match hashtags with 1-10 characters (including Japanese)
+        const regex = /(#[\w\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]{1,10})/g;
+        const parts = text.split(regex);
+
+        return parts.map((part, index) => {
+            if (part.match(regex)) {
+                const tag = part.substring(1); // Remove the # symbol
+                return (
+                    <span
+                        key={index}
+                        className="hashtag"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            navigate(`/search?q=${encodeURIComponent(part)}`);
+                        }}
+                    >
+                        {part}
+                    </span>
+                );
+            }
+            return part;
+        });
+    };
 
     const handleLike = async () => {
         try {
@@ -43,12 +73,28 @@ export default function Post({ post }) {
     }
 
     const handleCommentSubmit = async () => {
-        if (commentText.trim() === "") return;
+        if (commentText.trim() === "" && !commentFile) return;
+
+        let imgUrl = null;
+        if (commentFile) {
+            const data = new FormData();
+            const fileName = Date.now() + commentFile.name;
+            data.append("name", fileName);
+            data.append("file", commentFile);
+            try {
+                const res = await axios.post("/api/upload?type=comment", data);
+                imgUrl = res.data.filePath;
+            } catch (err) {
+                console.error(err);
+                return;
+            }
+        }
 
         try {
             const res = await axios.post(`/api/posts/${post._id}/comment`, {
                 userId: currentUser._id,
                 desc: commentText,
+                img: imgUrl,
             });
             // サーバーからのレスポンスに currentUser の情報を付加して擬似的なpopulateを行う
             const newComment = {
@@ -61,10 +107,16 @@ export default function Post({ post }) {
             };
             setComments([newComment, ...comments]); // 新しいコメントをリストの先頭に追加
             setCommentText("");
+            setCommentFile(null);
             setCommentCount(commentCount + 1);
         } catch (err) {
             console.error("コメントの投稿に失敗しました", err);
         }
+    };
+
+    const handleCommentDelete = (commentId) => {
+        setComments(comments.filter((c) => c._id !== commentId));
+        setCommentCount(commentCount - 1);
     };
 
     const toggleMenu = (e) => {
@@ -102,19 +154,38 @@ export default function Post({ post }) {
             <div className="postWrapper">
                 <div className="postTop">
                     <div className="postTopLeft">
-                        <Link to={`/profile/${post.userId?.username}`}>
-                            <img src={
-                                post.userId?.profilePicture?.startsWith("http")
-                                    ? post.userId.profilePicture
-                                    : PUBLIC_FOLDER + "person/noAvatar.png"
-                            }
-                                alt=""
-                                className="postProfileImg"
-                            />
-                        </Link>
-                        <span className='postUserName'>
-                            {post.userId?.username}
-                        </span>
+                        {post.isClassroom ? (
+                            <a href={post.courseLink} target="_blank" rel="noopener noreferrer">
+                                <img src={
+                                    post.userId?.profilePicture?.startsWith("http")
+                                        ? post.userId.profilePicture
+                                        : PUBLIC_FOLDER + (post.userId?.profilePicture?.startsWith("/assets/") ? post.userId.profilePicture.replace("/assets/", "") : (post.userId?.profilePicture || "person/noAvatar.png"))
+                                }
+                                    alt=""
+                                    className="postProfileImg"
+                                />
+                            </a>
+                        ) : (
+                            <Link to={`/profile/${post.userId?.username}`}>
+                                <img src={
+                                    post.userId?.profilePicture?.startsWith("http")
+                                        ? post.userId.profilePicture
+                                        : PUBLIC_FOLDER + (post.userId?.profilePicture?.startsWith("/assets/") ? post.userId.profilePicture.replace("/assets/", "") : (post.userId?.profilePicture || "person/noAvatar.png"))
+                                }
+                                    alt=""
+                                    className="postProfileImg"
+                                />
+                            </Link>
+                        )}
+                        {post.isClassroom ? (
+                            <a href={post.courseLink} target="_blank" rel="noopener noreferrer" className='postUserName classroomLink'>
+                                {post.userId?.username}
+                            </a>
+                        ) : (
+                            <span className='postUserName'>
+                                {post.userId?.username}
+                            </span>
+                        )}
                         <span className="postDate">
                             {format(post.createdAt)}
                         </span>
@@ -136,7 +207,7 @@ export default function Post({ post }) {
                 </div>
                 <div className="postCenter">
                     <span className="postText">
-                        {post.desc}
+                        {renderTextWithHashtags(post.desc)}
                     </span>
                     {post.img && (
                         <img
@@ -148,6 +219,17 @@ export default function Post({ post }) {
                             alt=""
                             className="postImg"
                         />
+                    )}
+                    {post.video && (
+                        <video src={post.video} controls playsInline preload="metadata" className="postVideo" />
+                    )}
+                    {post.file && (
+                        <div className="postFileWrapper">
+                            <a href={post.file} className="postFileLink" target="_blank" rel="noreferrer">
+                                <span style={{ marginRight: "5px" }}>📄</span>
+                                ファイルをダウンロード
+                            </a>
+                        </div>
                     )}
                 </div>
                 <div className="postBottom">
@@ -167,19 +249,54 @@ export default function Post({ post }) {
                 {showComments && (
                     <div className="commentSection">
                         {/* コメント入力フォーム */}
-                        <div className="commentInputWrapper">
-                            <input
-                                placeholder="コメントを追加..."
-                                className="commentInput"
-                                value={commentText}
-                                onChange={(e) => setCommentText(e.target.value)}
-                            />
-                            <button className="commentSubmitButton" onClick={handleCommentSubmit}>送信</button>
+                        <div className="commentInputContainer">
+                            {commentFile && (
+                                <div className="commentFilePreview">
+                                    <img src={URL.createObjectURL(commentFile)} alt="" className="commentFilePreviewImg" />
+                                    <Cancel className="commentFileCancel" onClick={() => setCommentFile(null)} />
+                                </div>
+                            )}
+                            <div className="commentInputWrapper">
+                                <label htmlFor={`comment-file-${post._id}`} className="commentFileIconLabel">
+                                    <AttachFile className="commentFileIcon" />
+                                    <input
+                                        type="file"
+                                        id={`comment-file-${post._id}`}
+                                        style={{ display: 'none' }}
+                                        accept=".png,.jpeg,.jpg"
+                                        onChange={async (e) => {
+                                            const file = e.target.files[0];
+                                            if (!file) return;
+
+                                            if (file.size > 100 * 1024 * 1024) {
+                                                alert("File too large"); return;
+                                            }
+
+                                            // Compression
+                                            const options = { maxSizeMB: 0.5, maxWidthOrHeight: 1200, useWebWorker: true };
+                                            try {
+                                                const compressedFile = await imageCompression(file, options);
+                                                const renamed = new File([compressedFile], file.name, { type: file.type });
+                                                setCommentFile(renamed);
+                                            } catch (err) {
+                                                console.error(err);
+                                            }
+                                        }}
+                                    />
+                                </label>
+                                <input
+                                    placeholder="コメントを追加..."
+                                    className="commentInput"
+                                    value={commentText}
+                                    onChange={(e) => setCommentText(e.target.value)}
+                                />
+                                <button className="commentSubmitButton" onClick={handleCommentSubmit}>送信</button>
+                            </div>
                         </div>
                         {/* コメント一覧 */}
                         <div className="commentList">
                             {comments.map((comment) => (
-                                <Comment key={comment._id} comment={comment} />
+                                <Comment key={comment._id} comment={comment} postId={post._id} onDelete={handleCommentDelete} />
                             ))}
                         </div>
                     </div>

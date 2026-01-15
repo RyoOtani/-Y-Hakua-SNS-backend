@@ -19,8 +19,8 @@ export default function Message({ message, own, setMessages }) {
         await axios.delete(`/api/messages/${message._id}`, {
           data: { userId: getSenderId() },
         });
-        // UIから削除（リロードなしで反映するため、親コンポーネントで管理するのが理想だが簡略化）
-        window.location.reload();
+        // UIから削除（リロードなしで反映）
+        setMessages((prev) => prev.filter((m) => m._id !== message._id));
       }
     } catch (err) {
       console.log(err);
@@ -77,10 +77,29 @@ export default function Message({ message, own, setMessages }) {
               <button onClick={() => setIsEditing(false)} className="messageEditButton cancel">キャンセル</button>
             </div>
           ) : (
-            <p className="messageText">
-              {message.text}
-              {message.edited && <span className="messageEditedLabel">(編集済み)</span>}
-            </p>
+            <>
+              {message.attachments && message.attachments.length > 0 && (
+                <div className="messageAttachments">
+                  {message.attachments.map((att, index) => (
+                    att.type === 'image' ? (
+                      <img src={att.url} key={index} alt="attachment" className="messageAttachmentImg" />
+                    ) : att.type === 'video' ? (
+                      <video src={att.url} key={index} controls playsInline preload="metadata" className="messageAttachmentVideo" />
+                    ) : (
+                      <a href={att.url} key={index} target="_blank" rel="noreferrer" className="messageAttachmentFile">
+                        📄 {att.filename || "File"}
+                      </a>
+                    )
+                  ))}
+                </div>
+              )}
+              {message.text && (
+                <p className="messageText">
+                  {message.text}
+                  {message.edited && <span className="messageEditedLabel">(編集済み)</span>}
+                </p>
+              )}
+            </>
           )}
 
           <div className="messageMeta">

@@ -15,11 +15,47 @@
     margin: 0 auto;
 }
 
-.notificationTitle {
+.notificationHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
     margin-bottom: 20px;
+}
+
+.notificationTitle {
+    margin-bottom: 0;
     font-size: 24px;
     font-weight: bold;
     color: #333;
+}
+
+.rankingLinkButton {
+    display: flex;
+    align-items: center;
+    background-color: #1877f2;
+    color: white;
+    padding: 8px 15px;
+    border-radius: 20px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.rankingLinkButton:hover {
+    background-color: #166fe5;
+}
+
+.rankingIcon {
+    margin-right: 5px;
+    font-size: 20px !important;
+}
+
+.dark-theme .rankingLinkButton {
+    background-color: #1da1f2;
+}
+
+.dark-theme .rankingLinkButton:hover {
+    background-color: #1a91da;
 }
 
 .notificationList {

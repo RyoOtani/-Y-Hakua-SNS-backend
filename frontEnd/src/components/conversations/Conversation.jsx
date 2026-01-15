@@ -4,7 +4,7 @@ import "./conversation.css";
 
 export default function Conversation({ conversation, currentUser }) {
   const [user, setUser] = useState(null);
-  const PF = process.env.REACT_APP_PUBLIC_FOLDER;
+  const PF = process.env.REACT_APP_PUBLIC_FOLDER || "/assets/";
 
   useEffect(() => {
     // メンバーの中から自分以外のユーザーを探す。オブジェクトかIDのどちらの可能性もある

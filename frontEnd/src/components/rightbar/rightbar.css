@@ -1,0 +1,243 @@
+.rightbar {
+  flex: 3.0;
+}
+
+.rightbarWrapper {
+  padding: 0 0 0 40px;
+}
+
+.eventContainer {
+  display: flex;
+  align-items: center;
+}
+
+.ClassNotification {
+  width: 40px;
+  height: 40px;
+  margin-right: 10px;
+}
+
+.eventDate {
+  font-weight: bolder;
+  font-size: large;
+}
+
+.eventImg {
+  width: 75%;
+  border-radius: 10px;
+  margin: 25px 0;
+}
+
+.rightbarTitle {
+  margin-bottom: 20px;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.FriendListDiv {
+  margin-top: 20px;
+}
+
+.FriendNameList {
+  padding: 10px;
+  margin: 20px;
+}
+
+.rightbarFriend {
+  display: flex;
+}
+
+.rightbarProfileImg {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  margin-right: 10px;
+}
+
+.rightbarUsername {
+  padding-top: 10px;
+}
+
+.promotinTitle {
+  font-size: 18px;
+  font-weight: bold;
+  margin-top: 18px;
+  margin-bottom: 10px;
+}
+
+.rightbarPromotionImg {
+  width: 85%;
+  border-radius: 10px;
+  margin: 25px 0;
+}
+
+.promotionName {
+  font-size: small;
+  color: gray;
+  margin-top: -20px;
+}
+
+.FriendList {
+  margin-bottom: 10px;
+}
+
+.rightbarTitle {
+  font-size: 18px;
+  font-weight: 550;
+  margin-bottom: 10px;
+}
+
+.rightbarInfo {
+  margin-bottom: 30px;
+}
+
+.rightbarInfoKey {
+  font-weight: 550;
+  margin-right: 5px;
+  color: #555;
+}
+
+.rightbarInfoItem {
+  margin-bottom: 10px;
+}
+
+.rightbarFollowings {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: 5px;
+}
+
+.rightbarFollowing {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 20px;
+  cursor: pointer;
+}
+
+.rightbarFollowingName {
+  margin-left: 10px;
+  align-items: center;
+}
+
+.rightbarFollowingImg {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.rightbarFollowButton {
+  border: none;
+  padding: 5px 10px;
+  border-radius: 5px;
+  background-color: #1872f2;
+  color: white;
+  font-weight: 500;
+  cursor: pointer;
+  margin-top: 5px;
+}
+
+/* Google Classroom Integration */
+.classroomContainer {
+  margin-bottom: 20px;
+}
+
+.rightbarButton {
+  width: 85%;
+  border: none;
+  background-color: #4285F4;
+  /* Google Blue */
+  color: white;
+  padding: 10px;
+  border-radius: 5px;
+  font-weight: 500;
+  cursor: pointer;
+  margin-bottom: 10px;
+  transition: background-color 0.3s;
+}
+
+.rightbarButton:hover:not(:disabled) {
+  background-color: #357ae8;
+}
+
+.rightbarButton:disabled {
+  background-color: #a0c3f0;
+  cursor: not-allowed;
+}
+
+.classroomList {
+  padding: 0;
+  margin: 10px 0 0 0;
+  list-style: none;
+}
+
+.classroomListItem {
+  background-color: #f0f2f5;
+  border-radius: 5px;
+  padding: 8px 12px;
+  margin-bottom: 5px;
+  font-size: 14px;
+}
+
+.errorMessage {
+  color: #d93025;
+  /* Google Red */
+  font-size: 14px;
+  display: block;
+  margin-top: 5px;
+}
+
+.noCoursesText {
+  color: grey;
+  font-size: 14px;
+}
+
+.rightbarHr {
+  margin: 20px 0;
+  border: 0;
+  border-top: 1px solid #e0e0e0;
+}
+
+
+/* ...existing code　with AI... */
+
+/* スマホサイズ（600px以下）の場合、Rightbar を非表示 */
+@media only screen and (max-width: 920px) {
+  .rightbar {
+    display: none;
+  }
+}
+
+/* Dark Theme Styles */
+.dark-theme .rightbarTitle,
+.dark-theme .rightbarInfoKey,
+.dark-theme .rightbarUsername,
+.dark-theme .eventDate,
+.dark-theme .rightbarFollowingName,
+.dark-theme .noCoursesText {
+  color: #f5f5f5;
+  /* Lighter text for dark background */
+}
+
+.dark-theme .promotionName {
+  color: #8899a6;
+  /* Muted color for less important text */
+}
+
+.dark-theme .classroomListItem {
+  background-color: #192734;
+  border: 1px solid #38444d;
+  color: #f5f5f5;
+}
+
+.dark-theme .rightbarHr {
+  border-top-color: #38444d;
+}
+
+.dark-theme .RigthtbarHint {
+  color: #8899a6;
+}

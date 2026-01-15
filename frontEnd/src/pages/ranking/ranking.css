@@ -1,0 +1,193 @@
+.rankingContainer {
+    display: flex;
+    width: 100%;
+}
+
+.rankingMain {
+    flex: 9;
+    padding: 20px 40px;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.rankingHeader {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.rankingHeader h2 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 700;
+}
+
+.rankingIcon {
+    font-size: 28px !important;
+    color: #ff6b6b;
+}
+
+.rankingSubtitle {
+    color: #666;
+    margin-bottom: 30px;
+    font-size: 14px;
+}
+
+.rankingLoading {
+    text-align: center;
+    padding: 40px;
+    color: #666;
+}
+
+.rankingEmpty {
+    text-align: center;
+    padding: 60px 20px;
+    background: #f8f9fa;
+    border-radius: 12px;
+}
+
+.emptyIcon {
+    font-size: 48px !important;
+    color: #ccc;
+    margin-bottom: 15px;
+}
+
+.rankingEmpty p {
+    margin: 5px 0;
+    color: #666;
+}
+
+.emptyHint {
+    font-size: 14px;
+    color: #999 !important;
+}
+
+.rankingList {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.rankingItem {
+    display: flex;
+    align-items: center;
+    padding: 16px 20px;
+    background: #fff;
+    border-radius: 12px;
+    margin-bottom: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    border: 1px solid #eee;
+}
+
+.rankingItem:hover {
+    transform: translateX(5px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    border-color: #1877f2;
+}
+
+.rankNumber {
+    font-size: 24px;
+    font-weight: 700;
+    color: #1877f2;
+    min-width: 40px;
+    text-align: center;
+}
+
+.rankingItem:nth-child(1) .rankNumber {
+    color: #ffd700;
+}
+
+.rankingItem:nth-child(2) .rankNumber {
+    color: #c0c0c0;
+}
+
+.rankingItem:nth-child(3) .rankNumber {
+    color: #cd7f32;
+}
+
+.rankContent {
+    display: flex;
+    flex-direction: column;
+    margin-left: 15px;
+}
+
+.rankTag {
+    font-size: 18px;
+    font-weight: 600;
+    color: #333;
+}
+
+.rankCount {
+    font-size: 13px;
+    color: #888;
+    margin-top: 4px;
+}
+
+/* Dark Theme */
+.dark-theme .rankingMain {
+    background-color: #15202b;
+}
+
+.dark-theme .rankingHeader h2 {
+    color: #f5f5f5;
+}
+
+.dark-theme .rankingSubtitle {
+    color: #8899a6;
+}
+
+.dark-theme .rankingEmpty {
+    background: #192734;
+}
+
+.dark-theme .emptyIcon {
+    color: #38444d;
+}
+
+.dark-theme .rankingEmpty p {
+    color: #8899a6;
+}
+
+.dark-theme .rankingItem {
+    background: #192734;
+    border-color: #38444d;
+}
+
+.dark-theme .rankingItem:hover {
+    border-color: #1da1f2;
+}
+
+.dark-theme .rankTag {
+    color: #f5f5f5;
+}
+
+.dark-theme .rankCount {
+    color: #8899a6;
+}
+
+/* Responsive */
+@media only screen and (max-width: 768px) {
+    .rankingMain {
+        padding: 15px;
+    }
+
+    .rankingHeader h2 {
+        font-size: 20px;
+    }
+
+    .rankingItem {
+        padding: 12px 15px;
+    }
+
+    .rankNumber {
+        font-size: 20px;
+        min-width: 35px;
+    }
+
+    .rankTag {
+        font-size: 16px;
+    }
+}

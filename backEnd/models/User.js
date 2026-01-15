@@ -109,6 +109,11 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: "Arial",
     },
+    desc: {
+      type: String,
+      max: 50,
+      default: "",
+    },
     // Add fields to store Google OAuth tokens
     accessToken: {
       type: String,
@@ -124,10 +129,14 @@ const userSchema = new mongoose.Schema(
     ],
     following: [
       {
-        type: mongoose.Schema.Types. ObjectId,
+        type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
       },
     ],
+    hasAgreedToPrivacyPolicy: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );

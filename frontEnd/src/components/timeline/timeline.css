@@ -84,3 +84,28 @@
         transform: rotate(360deg);
     }
 }
+
+/* Dark Theme Styles */
+.dark-theme .timeline {
+    color: #f5f5f5;
+}
+
+.dark-theme .refreshButton {
+    background-color: #192734;
+    color: #1da1f2;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+    border: 1px solid #38444d;
+}
+
+.dark-theme .refreshButton:hover {
+    background-color: #253341;
+}
+
+.dark-theme .syncButton {
+    color: #00c853;
+    /* Brighter green for dark mode */
+}
+
+.dark-theme .syncButton:hover {
+    background-color: #1e3a2f;
+}

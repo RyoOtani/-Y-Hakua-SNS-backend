@@ -2,9 +2,12 @@ import React, { useContext, useEffect, useState } from "react";
 import axios from "axios";
 import { AuthContext } from "../../state/AuthContext";
 import { SocketContext } from "../../state/SocketContext";
-import Topbar from "../../components/Topbar/TopbarMain";
+import Topbar from "../../components/topbar/topbarMain";
 import Sidebar from "../../components/sidebar/sidebar";
+import Bottombar from "../../components/bottombar/bottombar";
 import { format } from "timeago.js";
+import { Link } from "react-router-dom";
+import { TrendingUp } from "@mui/icons-material";
 import "./notification.css";
 
 export default function Notification() {
@@ -40,7 +43,15 @@ export default function Notification() {
                 </div>
                 <div className="notificationRight">
                     <div className="notificationWrapper">
-                        <h2 className="notificationTitle">Notifications</h2>
+                        <div className="notificationHeader">
+                            <h2 className="notificationTitle">Notifications</h2>
+                            <Link to="/ranking" style={{ textDecoration: "none" }}>
+                                <div className="rankingLinkButton">
+                                    <TrendingUp className="rankingIcon" />
+                                    <span>Trending Ranking</span>
+                                </div>
+                            </Link>
+                        </div>
                         {notifications.length === 0 && <span className="noNotifications">No notifications yet.</span>}
                         <ul className="notificationList">
                             {notifications.map((n) => (
@@ -68,6 +79,7 @@ export default function Notification() {
                     </div>
                 </div>
             </div>
+            <Bottombar />
         </>
     );
 }

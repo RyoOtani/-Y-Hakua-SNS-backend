@@ -28,7 +28,14 @@ router.post("/login", async (req, res) => {
     const vaildPassword = req.body.password === user.password;
     if (!vaildPassword) return res.status(400).json("パスワードが違います");
 
-    return res.status(200).json(user);
+    const token = jwt.sign(
+      { id: user._id, email: user.email },
+      process.env.JWT_SECRET || 'your-jwt-secret',
+      { expiresIn: '7d' }
+    );
+
+    const { password, ...userWithoutPassword } = user._doc;
+    return res.status(200).json({ ...userWithoutPassword, token });
   } catch (err) {
     return res.status(500).json(err);
   }
@@ -62,8 +69,6 @@ router.get(
       process.env.JWT_SECRET || 'your-jwt-secret',
       { expiresIn: '7d' }
     );
-
-    // フロントエンドにリダイレクト（トークンをクエリパラメータで渡す）
     res.redirect(`${process.env.FRONTEND_URL}/auth/success?token=${token}`);
   }
 );

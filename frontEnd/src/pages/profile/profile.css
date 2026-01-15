@@ -7,7 +7,7 @@
     flex: 2.5;
     position: sticky;
     top: 50px;
-  /* 必要に応じて z-index を調整 */
+    /* 必要に応じて z-index を調整 */
     z-index: 99;
 }
 
@@ -46,6 +46,35 @@
     justify-content: center;
 }
 
+.profileInfoNameWrapper {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.followButton {
+    border: none;
+    padding: 8px 24px;
+    border-radius: 20px;
+    background-color: #1872f2;
+    color: white;
+    font-weight: 500;
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    transition: all 0.2s;
+    font-size: 15px;
+}
+
+.followButton:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+    background-color: #166fe5;
+}
+
+.followButton:active {
+    transform: translateY(0);
+}
+
 .profileInfoName {
     font-size: 24px;
     font-weight: bolder;
@@ -61,8 +90,37 @@
 
 }
 
-@media screen and (min-width:471px){
+@media screen and (min-width:471px) {
     .bottombar {
         display: none;
     }
+}
+
+/* Dark Theme Styles */
+.dark-theme .profileRight {
+    color: #f5f5f5;
+}
+
+.dark-theme .followButton.followed {
+    background-color: #000000;
+    color: #ffffff;
+    border: 1px solid #555555;
+}
+
+.dark-theme .followButton.followed:hover {
+    background-color: #330000;
+    color: #ff6666;
+    border-color: #ff6666;
+}
+
+.dark-theme .profileInfoName {
+    color: #ffffff;
+}
+
+.dark-theme .profileUserImg {
+    border: 3px solid #15202b;
+}
+
+.dark-theme .profileRightBottom {
+    background-color: transparent;
 }

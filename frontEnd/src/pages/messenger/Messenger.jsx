@@ -1,11 +1,14 @@
 import "./messenger.css";
-import Topbar from "../../components/Topbar/TopbarMain";
+import Topbar from "../../components/topbar/topbarMain";
 import Sidebar from "../../components/sidebar/sidebar";
 import Conversation from "../../components/conversations/Conversation";
 import Message from "../../components/message/Message";
 import ChatHeader from "../../components/chatHeader/ChatHeader";
+import Bottombar from "../../components/bottombar/bottombar";
+import { Refresh, AttachFile, Cancel, Image, ArrowBack } from "@mui/icons-material";
 
 import { useContext, useEffect, useState, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { AuthContext } from "../../state/AuthContext";
 import axios from "axios";
 import { SocketContext } from "../../state/SocketContext";
@@ -16,11 +19,15 @@ export default function Messenger() {
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
   const [arrivalMessage, setArrivalMessage] = useState(null);
+  const [file, setFile] = useState(null);
 
   const [isTyping, setIsTyping] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [typingUser, setTypingUser] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState([]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const chatId = searchParams.get("chatId");
 
   const { socket, refreshUnreadMessages } = useContext(SocketContext); // Global socket
   const { user } = useContext(AuthContext);
@@ -60,6 +67,7 @@ export default function Messenger() {
       }
 
       setCurrentChat(existingConv);
+      setSearchParams({ chatId: existingConv._id });
       setSearchTerm("");
       setSearchResults([]);
     } catch (err) {
@@ -87,7 +95,11 @@ export default function Messenger() {
         text: data.text,
         conversationId: data.conversationId,
         createdAt: data.createdAt,
+        text: data.text,
+        conversationId: data.conversationId,
+        createdAt: data.createdAt,
         read: false,
+        attachments: data.attachments || [],
       });
     });
 
@@ -198,6 +210,16 @@ export default function Messenger() {
     getConversations();
   }, [user?._id]);
 
+  // Handle chatId from URL
+  useEffect(() => {
+    if (chatId && conversations.length > 0) {
+      const selectedConv = conversations.find((c) => c._id === chatId);
+      if (selectedConv) {
+        setCurrentChat(selectedConv);
+      }
+    }
+  }, [chatId, conversations]);
+
   useEffect(() => {
     const getMessages = async () => {
       try {
@@ -224,6 +246,19 @@ export default function Messenger() {
     };
     getMessages();
   }, [currentChat]);
+
+  const handleRefreshMessages = async () => {
+    if (!currentChat) return;
+    try {
+      setIsRefreshing(true);
+      const res = await axios.get("/api/messages/" + currentChat._id);
+      setMessages(res.data);
+    } catch (err) {
+      console.log(err);
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 500);
+    }
+  };
 
   // 2分ごとに自動更新（ポーリング）
   useEffect(() => {
@@ -280,17 +315,38 @@ export default function Messenger() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!newMessage.trim()) return;
+    if (!newMessage.trim() && !file) return;
 
     if (!socket) {
       console.error("Socket not connected");
       return;
     }
 
+    let attachments = [];
+    if (file) {
+      const data = new FormData();
+      const fileName = Date.now() + file.name;
+      data.append("name", fileName);
+      data.append("file", file);
+      try {
+        const res = await axios.post("/api/upload?type=chat", data);
+        const type = file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : "file";
+        attachments.push({
+          type: type,
+          url: res.data.filePath,
+          filename: file.name
+        });
+      } catch (err) {
+        console.error(err);
+        return;
+      }
+    }
+
     const message = {
       sender: user._id,
       text: newMessage,
       conversationId: currentChat._id,
+      attachments: attachments,
     };
 
     const receiverId = currentChat.members.find(
@@ -304,12 +360,14 @@ export default function Messenger() {
       receiverId,
       text: newMessage,
       conversationId: currentChat._id,
+      attachments: attachments,
     });
 
     try {
       const res = await axios.post("/api/messages", message);
       setMessages([...messages, res.data]);
       setNewMessage("");
+      setFile(null); // Reset file
 
       // 自分の会話リストを更新
       setConversations(prev => {
@@ -317,7 +375,7 @@ export default function Messenger() {
         if (targetIndex === -1) return prev; // 念のため
 
         const updatedConv = { ...prev[targetIndex] };
-        updatedConv.lastMessageText = newMessage;
+        updatedConv.lastMessageText = newMessage || (attachments.length > 0 ? "Sent an attachment" : "");
         updatedConv.lastMessageAt = Date.now();
 
         const newConvs = [...prev];
@@ -342,7 +400,7 @@ export default function Messenger() {
           <Sidebar />
         </div>
         <div className="messenger">
-          <div className="chatMenu">
+          <div className={`chatMenu ${currentChat ? "hidden-mobile" : ""}`}>
             <div className="chatMenuWrapper">
               <div className="chatMenuHeader">
                 <span className="chatMenuTitle">Conversations</span>
@@ -380,7 +438,10 @@ export default function Messenger() {
                 ) : (
                   conversations.map((c) => (
                     <div
-                      onClick={() => setCurrentChat(c)}
+                      onClick={() => {
+                        setCurrentChat(c);
+                        setSearchParams({ chatId: c._id });
+                      }}
                       key={c._id}
                       className={currentChat?._id === c._id ? "selectedConversation" : ""}
                     >
@@ -391,7 +452,7 @@ export default function Messenger() {
               </div>
             </div>
           </div>
-          <div className="chatBox">
+          <div className={`chatBox ${!currentChat ? "hidden-mobile" : ""}`}>
             <div className="chatBoxWrapper">
               {currentChat ? (
                 <>
@@ -406,6 +467,25 @@ export default function Messenger() {
                     })()}
                     <ChatHeader conversation={currentChat} currentUser={user} PF={PF} />
                   </div>
+                  <div className="chatBoxRefresh">
+                    <div className="chatHeaderMobileBack">
+                      <ArrowBack
+                        onClick={() => {
+                          setCurrentChat(null);
+                          setSearchParams({});
+                        }}
+                        className="chatBackIcon"
+                      />
+                    </div>
+                    <div
+                      className={`chatRefreshButton ${isRefreshing ? 'refreshing' : ''}`}
+                      onClick={handleRefreshMessages}
+                      title="Refresh Messages"
+                    >
+                      <Refresh className="chatRefreshIcon" />
+                      <span className="chatRefreshText">New Messages</span>
+                    </div>
+                  </div>
                   <div className="chatBoxTop">
                     {messages.map((m) => (
                       <div ref={scrollRef} key={m._id}>
@@ -418,7 +498,37 @@ export default function Messenger() {
                     ))}
                     {typingUser && <div className="typingIndicator">Someone is typing...</div>}
                   </div>
+                  {file && (
+                    <div className="chatFilePreviewContainer">
+                      {file.type.startsWith("image/") ? (
+                        <img src={URL.createObjectURL(file)} alt="" className="chatFilePreviewImg" />
+                      ) : (
+                        <div className="chatFilePreview">{file.name}</div>
+                      )}
+                      <Cancel className="chatFileCancel" onClick={() => setFile(null)} />
+                    </div>
+                  )}
                   <div className="chatBoxBottom">
+                    <label htmlFor="chatFile" className="chatFileLabel">
+                      <AttachFile className="chatFileIcon" />
+                      <input
+                        type="file"
+                        id="chatFile"
+                        style={{ display: "none" }}
+                        accept=".png, .jpeg, .jpg, .gif, .mp4, .mov, .avi, .webm, .pdf, .doc, .docx, .zip, .txt"
+                        onChange={(e) => {
+                          const f = e.target.files[0];
+                          if (f) {
+                            if (f.size > 100 * 1024 * 1024) {
+                              alert("File size too large (max 100MB)");
+                              e.target.value = "";
+                              return;
+                            }
+                            setFile(f);
+                          }
+                        }}
+                      />
+                    </label>
                     <textarea
                       className="chatMessageInput"
                       placeholder="Type a message..."
@@ -441,6 +551,9 @@ export default function Messenger() {
           </div>
 
         </div>
+      </div>
+      <div className="bottombar">
+        <Bottombar />
       </div>
     </>
   );
