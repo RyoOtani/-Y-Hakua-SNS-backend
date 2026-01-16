@@ -130,6 +130,10 @@ router.put("/:id/like", async (req, res) => {
 // 全ユーザーの投稿（グローバルタイムライン）
 router.get("/timeline/all", async (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
     const allPosts = await Post.aggregate([
       {
         $lookup: {
@@ -144,6 +148,12 @@ router.get("/timeline/all", async (req, res) => {
       },
       {
         $sort: { createdAt: -1 }
+      },
+      {
+        $skip: skip
+      },
+      {
+        $limit: limit
       }
     ]);
     return res.status(200).json(allPosts);
@@ -160,9 +170,15 @@ router.get("/profile/:username", async (req, res) => {
     if (!user) {
       return res.status(404).json("User not found");
     }
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
     const posts = await Post.find({ userId: user._id })
       .populate("userId", "username profilePicture")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
 
     return res.status(200).json(posts);
   } catch (err) {

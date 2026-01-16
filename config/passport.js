@@ -24,7 +24,7 @@
 //     },
 //     // async (accessToken, refreshToken, profile, done) => {
 //     //   // ここが重要！Googleから戻ってきたタイミングで実行されます
-      
+
 //     //   try {
 //     //     // 1. すでにDBにいるか確認
 //     //     let user = await User.findOne({ googleId: profile.id });
@@ -42,7 +42,7 @@
 //     //         avatarUrl: profile.photos[0].value,
 //     //         // 必要に応じて role: 'STUDENT' などをここで設定
 //     //       });
-          
+
 //     //       await newUser.save();
 //     //       return done(null, newUser);
 //     //     }
@@ -102,7 +102,7 @@ passport.use(
     {
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: '/api/auth/google/callback',
+      callbackURL: process.env.GOOGLE_CALLBACK_URL || '/api/auth/google/callback',
       scope: [
         "profile",
         "email",

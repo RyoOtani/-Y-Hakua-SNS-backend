@@ -47,13 +47,20 @@ router.post("/", async (req, res) => {
 // 会話内のメッセージ取得
 router.get("/:conversationId", async (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip = (page - 1) * limit;
+
     const messages = await Message.find({
       conversationId: req.params.conversationId,
       deletedAt: null, // 論理削除されていないメッセージのみ
     })
       .populate("sender", "username profilePicture")
-      .sort({ createdAt: 1 });
+      .sort({ createdAt: -1 }) // 最新順で取得（ページネーションのため）
+      .skip(skip)
+      .limit(limit);
 
+    // フロントエンドで時系列に並べるため、ここではそのまま（最新順）返す
     res.status(200).json(messages);
   } catch (err) {
     console.error("Message fetch error:", err);
