@@ -128,6 +128,13 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+app.get("/health", (req, res)=>{
+  res.status(200).json({
+    status:"OK",
+    uptime: process.uptime(),
+    timestamp: Date.now(),
+  });
+});
 // Serve static assets from the frontend's public directory
 // app.use(express.static('../frontEnd/public'));
 
