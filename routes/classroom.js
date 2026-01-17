@@ -18,7 +18,7 @@ router.get('/courses', passport.authenticate('jwt', { session: false }), async (
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
-      '/api/auth/google/callback' // passport.jsのcallbackURLと合わせる
+      process.env.GOOGLE_CALLBACK_URL || '/api/auth/google/callback' // passport.jsのcallbackURLと合わせる
     );
 
     // 3. ユーザーのDBから取得したトークンをクライアントにセット
@@ -66,7 +66,7 @@ router.get('/announcements', passport.authenticate('jwt', { session: false }), a
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
       process.env.GOOGLE_CLIENT_SECRET,
-      '/api/auth/google/callback'
+      process.env.GOOGLE_CALLBACK_URL || '/api/auth/google/callback'
     );
 
     oauth2Client.setCredentials({

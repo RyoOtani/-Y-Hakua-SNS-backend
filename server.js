@@ -13,13 +13,16 @@ dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "https://y-hakua-sns-frontend-29cj.vercel.app"
+].filter(Boolean);
+
 const io = new Server(server, {
   cors: {
-    origin: [
-      process.env.FRONTEND_URL || "http://localhost:3000",
-      "http://localhost:5173",          // ローカル開発（Vite）
-      "https://your-app.vercel.app"     // 本番フロント
-    ],
+    origin: allowedOrigins,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true,
   },
@@ -118,7 +121,7 @@ io.on("connection", (socket) => {
 app.use(helmet());
 app.use(morgan('common'));
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: allowedOrigins,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true
 }));
@@ -126,7 +129,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Serve static assets from the frontend's public directory
-app.use(express.static('../frontEnd/public'));
+// app.use(express.static('../frontEnd/public'));
 
 // セッション設定
 app.use(session({
