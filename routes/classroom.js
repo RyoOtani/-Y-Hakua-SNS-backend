@@ -57,6 +57,7 @@ router.get('/courses', passport.authenticate('jwt', { session: false }), async (
 
 // アナウンスメントを取得する新しいルート
 router.get('/announcements', passport.authenticate('jwt', { session: false }), async (req, res) => {
+  console.log(`[Classroom] GET /announcements hit for user: ${req.user.id} (${req.user.email})`);
   try {
     const user = await User.findById(req.user.id);
     if (!user || !user.refreshToken) {
@@ -151,8 +152,8 @@ router.get('/announcements', passport.authenticate('jwt', { session: false }), a
 
     // 3. 日付順にソート（新しい順）
     allItems.sort((a, b) => {
-      const dateA = new Date(a.updateTime || a.createdAt);
-      const dateB = new Date(b.updateTime || b.createdAt);
+      const dateA = new Date(a.updateTime || a.creationTime || a.createdAt);
+      const dateB = new Date(b.updateTime || b.creationTime || b.createdAt);
       return dateB - dateA;
     });
 
