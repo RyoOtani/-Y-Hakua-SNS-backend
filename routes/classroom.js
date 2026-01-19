@@ -90,7 +90,10 @@ router.get('/announcements', passport.authenticate('jwt', { session: false }), a
 
     // 1. コース一覧を取得
     console.log(`[Classroom] Fetching courses for user ${user._id}`);
-    const coursesRes = await classroom.courses.list({ courseStates: ['ACTIVE'] });
+    const coursesRes = await classroom.courses.list({
+      courseStates: ['ACTIVE'],
+      studentId: 'me' // 生徒として参加しているコースを明示的に取得
+    });
     const courses = coursesRes.data.courses || [];
     console.log(`[Classroom] Found ${courses.length} active courses`);
 
@@ -100,9 +103,9 @@ router.get('/announcements', passport.authenticate('jwt', { session: false }), a
         console.log(`[Classroom] Fetching content for course: ${course.name} (${course.id})`);
         // アナウンスメント、課題、資料を並列で取得
         const [announceRes, courseWorkRes, materialsRes] = await Promise.all([
-          classroom.courses.announcements.list({ courseId: course.id, pageSize: 5 }),
-          classroom.courses.courseWork.list({ courseId: course.id, pageSize: 5 }),
-          classroom.courses.courseWorkMaterials.list({ courseId: course.id, pageSize: 5 }),
+          classroom.courses.announcements.list({ courseId: course.id, pageSize: 5 }).catch(e => { console.error(`[Classroom] Announce Error (${course.name}):`, e.message); return { data: {} }; }),
+          classroom.courses.courseWork.list({ courseId: course.id, pageSize: 5 }).catch(e => { console.error(`[Classroom] CourseWork Error (${course.name}):`, e.message); return { data: {} }; }),
+          classroom.courses.courseWorkMaterials.list({ courseId: course.id, pageSize: 5 }).catch(e => { console.error(`[Classroom] Materials Error (${course.name}):`, e.message); return { data: {} }; }),
         ]);
 
         const announcements = (announceRes.data.announcements || []).map(item => ({
@@ -121,6 +124,7 @@ router.get('/announcements', passport.authenticate('jwt', { session: false }), a
           type: 'classroom_coursework',
           displayTitle: '[Classroom: 課題]',
           displayText: `${item.title}${item.description ? '\n\n' + item.description : ''}`,
+          materials: item.materials || []
         }));
 
         const materials = (materialsRes.data.courseWorkMaterial || []).map(item => ({
@@ -130,12 +134,13 @@ router.get('/announcements', passport.authenticate('jwt', { session: false }), a
           type: 'classroom_material',
           displayTitle: '[Classroom: 資料]',
           displayText: `${item.title}${item.description ? '\n\n' + item.description : ''}`,
+          materials: item.materials || []
         }));
 
         console.log(`[Classroom] Course ${course.name}: ${announcements.length} announcements, ${courseWork.length} coursework, ${materials.length} materials`);
         return [...announcements, ...courseWork, ...materials];
       } catch (err) {
-        console.error(`[Classroom] Failed to fetch content for course ${course.id}:`, err.message);
+        console.error(`[Classroom] Critical error for course ${course.id}:`, err.message);
         return [];
       }
     });
@@ -146,7 +151,9 @@ router.get('/announcements', passport.authenticate('jwt', { session: false }), a
 
     // 3. 日付順にソート（新しい順）
     allItems.sort((a, b) => {
-      return new Date(b.updateTime) - new Date(a.updateTime);
+      const dateA = new Date(a.updateTime || a.createdAt);
+      const dateB = new Date(b.updateTime || b.createdAt);
+      return dateB - dateA;
     });
 
     res.json(allItems);
