@@ -75,20 +75,29 @@ router.get('/announcements', passport.authenticate('jwt', { session: false }), a
     });
 
     oauth2Client.on('tokens', async (tokens) => {
-      if (tokens.access_token) {
-        await User.findByIdAndUpdate(user.id, { accessToken: tokens.access_token });
+      console.log(`[Classroom] Tokens event: tokens received for user ${user._id}`);
+      const updates = {};
+      if (tokens.access_token) updates.accessToken = tokens.access_token;
+      if (tokens.refresh_token) updates.refreshToken = tokens.refresh_token;
+
+      if (Object.keys(updates).length > 0) {
+        await User.findByIdAndUpdate(user.id, updates);
+        console.log(`[Classroom] Tokens updated for user ${user._id}: ${Object.keys(updates).join(', ')}`);
       }
     });
 
     const classroom = google.classroom({ version: 'v1', auth: oauth2Client });
 
     // 1. コース一覧を取得
+    console.log(`[Classroom] Fetching courses for user ${user._id}`);
     const coursesRes = await classroom.courses.list({ courseStates: ['ACTIVE'] });
     const courses = coursesRes.data.courses || [];
+    console.log(`[Classroom] Found ${courses.length} active courses`);
 
     // 2. 各コースのコンテンツを取得（並列処理）
     const contentPromises = courses.map(async (course) => {
       try {
+        console.log(`[Classroom] Fetching content for course: ${course.name} (${course.id})`);
         // アナウンスメント、課題、資料を並列で取得
         const [announceRes, courseWorkRes, materialsRes] = await Promise.all([
           classroom.courses.announcements.list({ courseId: course.id, pageSize: 5 }),
@@ -123,15 +132,17 @@ router.get('/announcements', passport.authenticate('jwt', { session: false }), a
           displayText: `${item.title}${item.description ? '\n\n' + item.description : ''}`,
         }));
 
+        console.log(`[Classroom] Course ${course.name}: ${announcements.length} announcements, ${courseWork.length} coursework, ${materials.length} materials`);
         return [...announcements, ...courseWork, ...materials];
       } catch (err) {
-        console.error(`Failed to fetch content for course ${course.id}:`, err.message);
+        console.error(`[Classroom] Failed to fetch content for course ${course.id}:`, err.message);
         return [];
       }
     });
 
     const results = await Promise.all(contentPromises);
     const allItems = results.flat();
+    console.log(`[Classroom] Total items fetched: ${allItems.length}`);
 
     // 3. 日付順にソート（新しい順）
     allItems.sort((a, b) => {
