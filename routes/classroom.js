@@ -92,8 +92,7 @@ router.get('/announcements', passport.authenticate('jwt', { session: false }), a
     // 1. コース一覧を取得
     console.log(`[Classroom] Fetching courses for user ${user._id}`);
     const coursesRes = await classroom.courses.list({
-      courseStates: ['ACTIVE'],
-      studentId: 'me' // 生徒として参加しているコースを明示的に取得
+      courseStates: ['ACTIVE']
     });
     const courses = coursesRes.data.courses || [];
     console.log(`[Classroom] Found ${courses.length} active courses`);

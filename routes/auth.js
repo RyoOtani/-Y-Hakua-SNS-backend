@@ -47,10 +47,13 @@ router.get(
   '/google',
   passport.authenticate('google', {
     scope: [
+      'openid',
       'profile',
       'email',
       'https://www.googleapis.com/auth/classroom.courses.readonly',
+      'https://www.googleapis.com/auth/classroom.coursework.readonly',
       'https://www.googleapis.com/auth/classroom.announcements.readonly',
+      'https://www.googleapis.com/auth/classroom.courseworkmaterials.readonly',
       'https://www.googleapis.com/auth/classroom.rosters.readonly'
     ],
     accessType: 'offline', // リフレッシュトークンを取得するために必須
