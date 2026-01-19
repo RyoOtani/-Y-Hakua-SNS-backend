@@ -86,35 +86,59 @@ router.get('/announcements', passport.authenticate('jwt', { session: false }), a
     const coursesRes = await classroom.courses.list({ courseStates: ['ACTIVE'] });
     const courses = coursesRes.data.courses || [];
 
-    // 2. 各コースのアナウンスメントを取得（並列処理）
-    const announcementsPromises = courses.map(async (course) => {
+    // 2. 各コースのコンテンツを取得（並列処理）
+    const contentPromises = courses.map(async (course) => {
       try {
-        const announceRes = await classroom.courses.announcements.list({
-          courseId: course.id,
-          pageSize: 5, // 最新5件程度で十分
-        });
+        // アナウンスメント、課題、資料を並列で取得
+        const [announceRes, courseWorkRes, materialsRes] = await Promise.all([
+          classroom.courses.announcements.list({ courseId: course.id, pageSize: 5 }),
+          classroom.courses.courseWork.list({ courseId: course.id, pageSize: 5 }),
+          classroom.courses.courseWorkMaterials.list({ courseId: course.id, pageSize: 5 }),
+        ]);
 
-        return (announceRes.data.announcements || []).map(item => ({
+        const announcements = (announceRes.data.announcements || []).map(item => ({
           ...item,
           courseName: course.name,
           courseLink: course.alternateLink,
-          type: 'classroom_announcement' // 識別のためのタイプ
+          type: 'classroom_announcement',
+          displayTitle: '[Classroom: アナウンスメント]',
+          displayText: item.text,
         }));
+
+        const courseWork = (courseWorkRes.data.courseWork || []).map(item => ({
+          ...item,
+          courseName: course.name,
+          courseLink: course.alternateLink,
+          type: 'classroom_coursework',
+          displayTitle: '[Classroom: 課題]',
+          displayText: `${item.title}${item.description ? '\n\n' + item.description : ''}`,
+        }));
+
+        const materials = (materialsRes.data.courseWorkMaterial || []).map(item => ({
+          ...item,
+          courseName: course.name,
+          courseLink: course.alternateLink,
+          type: 'classroom_material',
+          displayTitle: '[Classroom: 資料]',
+          displayText: `${item.title}${item.description ? '\n\n' + item.description : ''}`,
+        }));
+
+        return [...announcements, ...courseWork, ...materials];
       } catch (err) {
-        console.error(`Failed to fetch announcements for course ${course.id}:`, err.message);
+        console.error(`Failed to fetch content for course ${course.id}:`, err.message);
         return [];
       }
     });
 
-    const results = await Promise.all(announcementsPromises);
-    const allAnnouncements = results.flat();
+    const results = await Promise.all(contentPromises);
+    const allItems = results.flat();
 
     // 3. 日付順にソート（新しい順）
-    allAnnouncements.sort((a, b) => {
+    allItems.sort((a, b) => {
       return new Date(b.updateTime) - new Date(a.updateTime);
     });
 
-    res.json(allAnnouncements);
+    res.json(allItems);
 
   } catch (error) {
     console.error('Failed to fetch announcements:', error);
