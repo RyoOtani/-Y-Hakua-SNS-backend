@@ -100,13 +100,27 @@ router.get(
 
     if (req._oauthPlatform === 'mobile') {
       res.clearCookie('oauth_platform');
-      // HTML経由でディープリンクを開く（302リダイレクトよりも確実）
+      const deepLink = `hakuasns://auth/success?token=${token}`;
+      // HTML中間ページ：複数の方法でディープリンクを開く
       return res.send(`<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>ログイン完了</title></head>
-<body style="display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;">
-  <p>アプリに戻っています...</p>
+<html><head><meta charset="utf-8"><title>ログイン完了</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="display:flex;flex-direction:column;justify-content:center;align-items:center;height:100vh;font-family:-apple-system,sans-serif;margin:0;background:#f0f2f5;">
+  <p style="font-size:18px;color:#333;margin-bottom:20px;">ログインが完了しました</p>
+  <a id="openApp" href="${deepLink}" style="display:inline-block;padding:16px 40px;background:#1775ee;color:white;border-radius:30px;text-decoration:none;font-size:16px;font-weight:600;">アプリを開く</a>
+  <p style="font-size:14px;color:#666;margin-top:20px;">ボタンが動作しない場合は、手動でアプリに戻ってください</p>
   <script>
-    window.location.href = 'hakuasns://auth/success?token=${token}';
+    // 方法1: iframeでスキームを開く（Safariで最も確実）
+    var iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.src = '${deepLink}';
+    document.body.appendChild(iframe);
+
+    // 方法2: window.locationでも試行
+    setTimeout(function() {
+      window.location.replace('${deepLink}');
+    }, 500);
   </script>
 </body></html>`);
     }
