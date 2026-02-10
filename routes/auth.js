@@ -46,9 +46,14 @@ router.post("/login", async (req, res) => {
 router.get(
   '/google',
   (req, res, next) => {
-    // platformパラメータをセッションに保存（コールバック時に参照）
-    if (req.query.platform) {
-      req.session.oauthPlatform = req.query.platform;
+    // platformパラメータをCookieに保存（セッションはpassportが再生成するため消える）
+    if (req.query.platform === 'mobile') {
+      res.cookie('oauth_platform', 'mobile', {
+        maxAge: 5 * 60 * 1000, // 5分
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      });
     }
     next();
   },
@@ -80,9 +85,14 @@ router.get(
       { expiresIn: '7d' }
     );
 
-    // モバイルアプリからのリクエストの場合、カスタムURLスキームにリダイレクト
-    const platform = req.query.state || req.session?.oauthPlatform;
+    // Cookieからプラットフォームをチェック（セッションと違いpassportの再生成で消えない）
+    const cookies = req.headers.cookie || '';
+    const platformMatch = cookies.match(/oauth_platform=([^;]+)/);
+    const platform = platformMatch ? platformMatch[1] : null;
+
     if (platform === 'mobile') {
+      // Cookieをクリアしてアプリにリダイレクト
+      res.clearCookie('oauth_platform');
       return res.redirect(`hakuasns://auth/success?token=${token}`);
     }
 
