@@ -6,13 +6,34 @@ const { authenticate } = require("../middleware/auth");
 // メッセージ追加
 router.post("/", authenticate, async (req, res) => {
   try {
-    const { conversationId, text, attachments } = req.body;
+    let { conversationId, receiverId, text, attachments } = req.body;
     const sender = req.user._id;
+    let conversation;
 
-    // 会話メンバーシップの確認
-    const conversation = await Conversation.findById(conversationId);
-    if (!conversation || !conversation.members.map(m => m.toString()).includes(sender.toString())) {
-      return res.status(403).json({ error: "この会話にメッセージを送る権限がありません" });
+    if (conversationId) {
+      // 既存の会話IDが指定されている場合
+      conversation = await Conversation.findById(conversationId);
+      if (!conversation || !conversation.members.map(m => m.toString()).includes(sender.toString())) {
+        return res.status(403).json({ error: "この会話にメッセージを送る権限がありません" });
+      }
+    } else if (receiverId) {
+      // receiverIdのみ指定 → 会話を自動作成 or 既存を検索
+      conversation = await Conversation.findOne({
+        members: { $all: [sender, receiverId] },
+      });
+      if (!conversation) {
+        conversation = new Conversation({
+          members: [sender, receiverId],
+          unreadCount: new Map([
+            [sender.toString(), 0],
+            [receiverId.toString(), 0],
+          ]),
+        });
+        await conversation.save();
+      }
+      conversationId = conversation._id;
+    } else {
+      return res.status(400).json({ error: "conversationId または receiverId が必要です" });
     }
 
     const newMessage = new Message({
