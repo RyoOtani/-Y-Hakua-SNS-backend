@@ -183,7 +183,7 @@ router.get(
 </body></html>`);
     }
 
-    res.redirect(`${process.env.FRONTEND_URL}/auth/success`);
+    res.redirect(`${process.env.FRONTEND_URL}/auth/success?token=${token}`);
   }
 );
 
