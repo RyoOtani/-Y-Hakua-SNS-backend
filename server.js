@@ -142,9 +142,13 @@ app.get("/health", (req, res) => {
 // Serve static assets from the frontend's public directory
 // app.use(express.static('../frontEnd/public'));
 
-// セッション設定
+// セッション設定（必須環境変数が無ければ起動しない）
+if (!process.env.SESSION_SECRET) {
+  throw new Error('SESSION_SECRET is required for secure sessions');
+}
+
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   proxy: true, // Required for Secure cookies behind a proxy

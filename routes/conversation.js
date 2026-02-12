@@ -1,11 +1,13 @@
 const router = require("express").Router();
 const Conversation = require("../models/Conversation");
 const Message = require("../models/Message");
+const { authenticate } = require("../middleware/auth");
 
 // 新規会話作成
-router.post("/", async (req, res) => {
+router.post("/", authenticate, async (req, res) => {
   try {
-    const { senderId, receiverId } = req.body;
+    const senderId = req.user._id;
+    const { receiverId } = req.body;
 
     // 既存の会話があるか確認
     const existingConversation = await Conversation.findOne({
@@ -20,7 +22,7 @@ router.post("/", async (req, res) => {
     const newConversation = new Conversation({
       members: [senderId, receiverId],
       unreadCount: new Map([
-        [senderId, 0],
+        [senderId.toString(), 0],
         [receiverId, 0],
       ]),
     });
@@ -33,20 +35,20 @@ router.post("/", async (req, res) => {
   }
 });
 
-// ユーザーの全会話を取得（メンバー情報付き）
-router.get("/:userId", async (req, res) => {
+// ログインユーザーの全会話を取得（メンバー情報付き）
+router.get("/", authenticate, async (req, res) => {
   try {
+    const userId = req.user._id;
     const conversations = await Conversation.find({
-      members: { $in: [req.params.userId] },
+      members: { $in: [userId] },
     })
       .populate("members", "username profilePicture")
       .populate("lastMessage")
-      .sort({ lastMessageAt: -1 }); // 最新メッセージ順
+      .sort({ lastMessageAt: -1 });
 
-    // 各会話に未読カウントを追加
     const conversationsWithUnread = conversations.map((conv) => ({
       ...conv.toObject(),
-      myUnreadCount: conv.unreadCount?.get(req.params.userId) || 0,
+      myUnreadCount: conv.unreadCount?.get(userId.toString()) || 0,
     }));
 
     res.status(200).json(conversationsWithUnread);
@@ -57,10 +59,10 @@ router.get("/:userId", async (req, res) => {
 });
 
 // 特定の2ユーザー間の会話を取得
-router.get("/find/:firstUserId/:secondUserId", async (req, res) => {
+router.get("/find/:secondUserId", authenticate, async (req, res) => {
   try {
     const conversation = await Conversation.findOne({
-      members: { $all: [req.params.firstUserId, req.params.secondUserId] },
+      members: { $all: [req.user._id, req.params.secondUserId] },
     })
       .populate("members", "username profilePicture")
       .populate("lastMessage");
@@ -73,9 +75,9 @@ router.get("/find/:firstUserId/:secondUserId", async (req, res) => {
 });
 
 // 会話削除
-router.delete("/:conversationId", async (req, res) => {
+router.delete("/:conversationId", authenticate, async (req, res) => {
   try {
-    const { userId } = req.body;
+    const userId = req.user._id.toString();
     const conversation = await Conversation.findById(req.params.conversationId);
 
     if (!conversation) {
@@ -104,12 +106,12 @@ router.delete("/:conversationId", async (req, res) => {
 });
 
 // 全体の未読メッセージ数を取得
-router.get("/unread-total/:userId", async (req, res) => {
+router.get("/unread-total", authenticate, async (req, res) => {
   try {
-    const { userId } = req.params;
+    const userId = req.user._id.toString();
 
     const conversations = await Conversation.find({
-      members: userId,
+      members: req.user._id,
     });
 
     let totalUnread = 0;
@@ -125,28 +127,39 @@ router.get("/unread-total/:userId", async (req, res) => {
 });
 
 // メッセージ追加（後方互換性のため維持）
-router.post("/message", async (req, res) => {
+router.post("/message", authenticate, async (req, res) => {
   try {
-    const newMessage = new Message(req.body);
+    const sender = req.user._id;
+    const { conversationId, text, attachments } = req.body;
+
+    // 会話メンバーシップの確認
+    const conversation = await Conversation.findById(conversationId);
+    if (!conversation || !conversation.members.map(m => m.toString()).includes(sender.toString())) {
+      return res.status(403).json({ error: "この会話にメッセージを送る権限がありません" });
+    }
+
+    const newMessage = new Message({
+      conversationId,
+      sender,
+      text,
+      attachments: attachments || [],
+    });
     const savedMessage = await newMessage.save();
 
     // 会話の最新メッセージを更新
-    const conversation = await Conversation.findById(req.body.conversationId);
-    if (conversation) {
-      conversation.lastMessage = savedMessage._id;
-      conversation.lastMessageText = req.body.text;
-      conversation.lastMessageAt = savedMessage.createdAt;
+    conversation.lastMessage = savedMessage._id;
+    conversation.lastMessageText = text;
+    conversation.lastMessageAt = savedMessage.createdAt;
 
-      // 送信者以外の未読カウントを増やす
-      conversation.members.forEach((memberId) => {
-        if (memberId.toString() !== req.body.sender) {
-          const currentCount = conversation.unreadCount.get(memberId.toString()) || 0;
-          conversation.unreadCount.set(memberId.toString(), currentCount + 1);
-        }
-      });
+    // 送信者以外の未読カウントを増やす
+    conversation.members.forEach((memberId) => {
+      if (memberId.toString() !== sender.toString()) {
+        const currentCount = conversation.unreadCount.get(memberId.toString()) || 0;
+        conversation.unreadCount.set(memberId.toString(), currentCount + 1);
+      }
+    });
 
-      await conversation.save();
-    }
+    await conversation.save();
 
     res.status(201).json(savedMessage);
   } catch (err) {
@@ -156,14 +169,21 @@ router.post("/message", async (req, res) => {
 });
 
 // メッセージ取得（後方互換性のため維持）
-router.get("/message/:conversationId", async (req, res) => {
+router.get("/message/:conversationId", authenticate, async (req, res) => {
   try {
+    // 会話メンバーシップの確認
+    const conversation = await Conversation.findById(req.params.conversationId);
+    if (!conversation || !conversation.members.map(m => m.toString()).includes(req.user._id.toString())) {
+      return res.status(403).json({ error: "この会話を閲覧する権限がありません" });
+    }
+
     const messages = await Message.find({
       conversationId: req.params.conversationId,
       deletedAt: null,
     })
       .populate("sender", "username profilePicture")
-      .sort({ createdAt: 1 });
+      .sort({ createdAt: 1 })
+      .limit(100);
 
     res.status(200).json(messages);
   } catch (err) {

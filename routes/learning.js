@@ -1,8 +1,9 @@
 const router = require('express').Router();
 const LearningSession = require('../models/LearningSession');
 const LearningGoal = require('../models/LearningGoal');
-const User = require('../models/User'); // Userモデルも必要になるため追加
+const User = require('../models/User');
 const { Redis } = require('@upstash/redis');
+const { authenticate } = require('../middleware/auth');
 
 // Redisクライアントの初期化
 const redis = new Redis({
@@ -14,7 +15,6 @@ const redis = new Redis({
 const getWeeklyRankingKey = () => {
     const now = new Date();
     const year = now.getFullYear();
-    // ISO週番号の計算（簡易版）
     const start = new Date(year, 0, 1);
     const days = Math.floor((now - start) / (24 * 60 * 60 * 1000));
     const week = Math.ceil((days + 1) / 7);
@@ -26,9 +26,10 @@ const getWeeklyRankingKey = () => {
 // =====================================
 
 // 学習セッション開始
-router.post('/sessions/start', async (req, res) => {
+router.post('/sessions/start', authenticate, async (req, res) => {
     try {
-        const { userId, subject } = req.body;
+        const userId = req.user._id;
+        const { subject } = req.body;
 
         // 既にアクティブなセッションがあるかチェック
         const existingSession = await LearningSession.findOne({
@@ -59,9 +60,9 @@ router.post('/sessions/start', async (req, res) => {
 });
 
 // 学習セッション終了
-router.post('/sessions/stop', async (req, res) => {
+router.post('/sessions/stop', authenticate, async (req, res) => {
     try {
-        const { userId } = req.body;
+        const userId = req.user._id;
 
         const session = await LearningSession.findOne({
             userId,
@@ -73,7 +74,7 @@ router.post('/sessions/stop', async (req, res) => {
         }
 
         const endTime = new Date();
-        const duration = Math.round((endTime - session.startTime) / 1000 / 60); // 分に変換
+        const duration = Math.round((endTime - session.startTime) / 1000 / 60);
 
         session.endTime = endTime;
         session.duration = duration;
@@ -84,10 +85,9 @@ router.post('/sessions/stop', async (req, res) => {
         // Redisの週間ランキングを更新
         try {
             const rankingKey = getWeeklyRankingKey();
-            await redis.zincrby(rankingKey, duration, userId);
+            await redis.zincrby(rankingKey, duration, userId.toString());
         } catch (redisErr) {
             console.error('Redis ranking update failed:', redisErr);
-            // Redis更新失敗はクリティカルではないため、処理は続行
         }
 
         res.status(200).json(updatedSession);
@@ -98,10 +98,10 @@ router.post('/sessions/stop', async (req, res) => {
 });
 
 // アクティブなセッションを取得
-router.get('/sessions/active/:userId', async (req, res) => {
+router.get('/sessions/active', authenticate, async (req, res) => {
     try {
         const session = await LearningSession.findOne({
-            userId: req.params.userId,
+            userId: req.user._id,
             isActive: true,
         });
 
@@ -113,10 +113,10 @@ router.get('/sessions/active/:userId', async (req, res) => {
 });
 
 // セッション一覧取得（日付範囲指定可能）
-router.get('/sessions/:userId', async (req, res) => {
+router.get('/sessions', authenticate, async (req, res) => {
     try {
         const { startDate, endDate, limit } = req.query;
-        const query = { userId: req.params.userId, isActive: false };
+        const query = { userId: req.user._id, isActive: false };
 
         if (startDate || endDate) {
             query.startTime = {};
@@ -126,7 +126,7 @@ router.get('/sessions/:userId', async (req, res) => {
 
         const sessions = await LearningSession.find(query)
             .sort({ startTime: -1 })
-            .limit(parseInt(limit) || 50);
+            .limit(Math.min(parseInt(limit) || 50, 100));
 
         res.status(200).json(sessions);
     } catch (err) {
@@ -140,29 +140,25 @@ router.get('/sessions/:userId', async (req, res) => {
 // =====================================
 
 // 統計データを取得
-router.get('/stats/:userId', async (req, res) => {
+router.get('/stats', authenticate, async (req, res) => {
     try {
-        const userId = req.params.userId;
+        const userId = req.user._id;
         const now = new Date();
 
-        // 今日の開始時刻
         const todayStart = new Date(now);
         todayStart.setHours(0, 0, 0, 0);
 
-        // 今週の開始時刻（日曜日）
         const weekStart = new Date(now);
         weekStart.setDate(now.getDate() - now.getDay());
         weekStart.setHours(0, 0, 0, 0);
 
-        // 今月の開始時刻
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-        // 各期間の学習時間を集計
         const [todayStats, weekStats, monthStats, totalStats] = await Promise.all([
             LearningSession.aggregate([
                 {
                     $match: {
-                        userId: require('mongoose').Types.ObjectId.createFromHexString(userId),
+                        userId: userId,
                         startTime: { $gte: todayStart },
                         isActive: false,
                     },
@@ -172,7 +168,7 @@ router.get('/stats/:userId', async (req, res) => {
             LearningSession.aggregate([
                 {
                     $match: {
-                        userId: require('mongoose').Types.ObjectId.createFromHexString(userId),
+                        userId: userId,
                         startTime: { $gte: weekStart },
                         isActive: false,
                     },
@@ -182,7 +178,7 @@ router.get('/stats/:userId', async (req, res) => {
             LearningSession.aggregate([
                 {
                     $match: {
-                        userId: require('mongoose').Types.ObjectId.createFromHexString(userId),
+                        userId: userId,
                         startTime: { $gte: monthStart },
                         isActive: false,
                     },
@@ -192,7 +188,7 @@ router.get('/stats/:userId', async (req, res) => {
             LearningSession.aggregate([
                 {
                     $match: {
-                        userId: require('mongoose').Types.ObjectId.createFromHexString(userId),
+                        userId: userId,
                         isActive: false,
                     },
                 },
@@ -204,7 +200,7 @@ router.get('/stats/:userId', async (req, res) => {
         const dailyStats = await LearningSession.aggregate([
             {
                 $match: {
-                    userId: require('mongoose').Types.ObjectId.createFromHexString(userId),
+                    userId: userId,
                     startTime: { $gte: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) },
                     isActive: false,
                 },
@@ -236,15 +232,15 @@ router.get('/stats/:userId', async (req, res) => {
 // =====================================
 
 // ストリーク情報を取得
-router.get('/streak/:userId', async (req, res) => {
+router.get('/streak', authenticate, async (req, res) => {
     try {
-        const userId = req.params.userId;
+        const userId = req.user._id;
 
         // 過去100日間の学習日を取得
         const learningDays = await LearningSession.aggregate([
             {
                 $match: {
-                    userId: require('mongoose').Types.ObjectId.createFromHexString(userId),
+                    userId: userId,
                     isActive: false,
                 },
             },
@@ -266,7 +262,6 @@ router.get('/streak/:userId', async (req, res) => {
             .toISOString()
             .split('T')[0];
 
-        // 今日か昨日のデータがあればストリーク計算開始
         if (dates.length > 0 && (dates[0] === today || dates[0] === yesterday)) {
             currentStreak = 1;
             for (let i = 1; i < dates.length; i++) {
@@ -312,7 +307,7 @@ router.get('/streak/:userId', async (req, res) => {
         res.status(200).json({
             currentStreak,
             longestStreak,
-            learningDates: dates.slice(0, 30), // 過去30日分の学習日
+            learningDates: dates.slice(0, 30),
         });
     } catch (err) {
         console.error('Error fetching streak:', err);
@@ -325,10 +320,10 @@ router.get('/streak/:userId', async (req, res) => {
 // =====================================
 
 // 目標を取得
-router.get('/goals/:userId', async (req, res) => {
+router.get('/goals', authenticate, async (req, res) => {
     try {
         const goals = await LearningGoal.find({
-            userId: req.params.userId,
+            userId: req.user._id,
             isActive: true,
         });
 
@@ -340,11 +335,15 @@ router.get('/goals/:userId', async (req, res) => {
 });
 
 // 目標を設定/更新
-router.post('/goals', async (req, res) => {
+router.post('/goals', authenticate, async (req, res) => {
     try {
-        const { userId, type, targetMinutes } = req.body;
+        const userId = req.user._id;
+        const { type, targetMinutes } = req.body;
 
-        // 既存の目標があれば更新、なければ作成
+        if (!type || !targetMinutes || targetMinutes <= 0) {
+            return res.status(400).json({ message: '目標タイプと目標時間は必須です' });
+        }
+
         const goal = await LearningGoal.findOneAndUpdate(
             { userId, type },
             { userId, type, targetMinutes, isActive: true },
@@ -359,8 +358,16 @@ router.post('/goals', async (req, res) => {
 });
 
 // 目標を削除
-router.delete('/goals/:id', async (req, res) => {
+router.delete('/goals/:id', authenticate, async (req, res) => {
     try {
+        const goal = await LearningGoal.findById(req.params.id);
+        if (!goal) {
+            return res.status(404).json({ message: '目標が見つかりません' });
+        }
+        // 自分の目標のみ削除可能
+        if (goal.userId.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ message: '自分の目標のみ削除できます' });
+        }
         await LearningGoal.findByIdAndUpdate(req.params.id, { isActive: false });
         res.status(200).json({ message: '目標を削除しました' });
     } catch (err) {

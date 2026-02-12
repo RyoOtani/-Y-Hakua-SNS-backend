@@ -1,43 +1,96 @@
 const express = require('express');
 const passport = require('passport');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const User = require("../models/User");
 
+// ログイン・登録用レート制限
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15分
+  max: 20, // 15分間に最大20回
+  message: { error: 'リクエストが多すぎます。しばらくしてからお試しください。' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// JWT秘密鍵チェック（起動時に環境変数が設定されていなければ警告）
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET must be set');
+}
+
 //ユーザー登録
-router.post("/register", async (req, res) => {
+router.post("/register", authLimiter, async (req, res) => {
   try {
+    const { username, email, password } = req.body;
+
+    // 入力バリデーション
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'ユーザー名、メールアドレス、パスワードは必須です' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'パスワードは6文字以上にしてください' });
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: '有効なメールアドレスを入力してください' });
+    }
+    if (username.length < 2 || username.length > 30) {
+      return res.status(400).json({ error: 'ユーザー名は2〜30文字にしてください' });
+    }
+
+    // パスワードをハッシュ化
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
     const newUser = new User({
-      username: req.body.username,
-      email: req.body.email,
-      password: req.body.password,
+      username,
+      email,
+      password: hashedPassword,
     });
     const user = await newUser.save();
-    return res.status(200).json(user);
+    const { password: _, ...userWithoutPassword } = user._doc;
+    return res.status(200).json(userWithoutPassword);
   } catch (err) {
-    return res.status(500).json(err);
+    if (err.code === 11000) {
+      return res.status(409).json({ error: 'そのユーザー名またはメールアドレスは既に使用されています' });
+    }
+    console.error('Register error:', err);
+    return res.status(500).json({ error: '登録に失敗しました' });
   }
 });
 
 //ログイン
-router.post("/login", async (req, res) => {
+router.post("/login", authLimiter, async (req, res) => {
   try {
-    const user = await User.findOne({ email: req.body.email });
-    if (!user) return res.status(404).send("ユーザーが見つかりません");
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'メールアドレスとパスワードは必須です' });
+    }
 
-    const vaildPassword = req.body.password === user.password;
-    if (!vaildPassword) return res.status(400).json("パスワードが違います");
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ error: "ユーザーが見つかりません" });
+
+    // パスワードがない（Google認証ユーザー）
+    if (!user.password) {
+      return res.status(400).json({ error: 'このアカウントはGoogleログインを使用してください' });
+    }
+
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) return res.status(400).json({ error: "パスワードが違います" });
 
     const token = jwt.sign(
       { id: user._id, email: user.email },
-      process.env.JWT_SECRET || 'your-jwt-secret',
+      JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    const { password, ...userWithoutPassword } = user._doc;
-    return res.status(200).json({ ...userWithoutPassword, token });
+    const { password: _, accessToken: _a, refreshToken: _r, ...userWithoutSensitive } = user._doc;
+    return res.status(200).json({ ...userWithoutSensitive, token });
   } catch (err) {
-    return res.status(500).json(err);
+    console.error('Login error:', err);
+    return res.status(500).json({ error: 'ログインに失敗しました' });
   }
 });
 
@@ -94,14 +147,22 @@ router.get(
     // JWTトークンを生成
     const token = jwt.sign(
       { id: req.user._id, email: req.user.email },
-      process.env.JWT_SECRET || 'your-jwt-secret',
+      JWT_SECRET,
       { expiresIn: '7d' }
     );
 
+    // Web: HttpOnly Cookieで返す
+    res.cookie('auth_token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'none',
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      path: '/',
+    });
+
     if (req._oauthPlatform === 'mobile') {
       res.clearCookie('oauth_platform');
-      const deepLink = `hakuasns://auth/success?token=${token}`;
-      // HTML中間ページ：複数の方法でディープリンクを開く
+      const deepLink = `hakuasns://auth/success#token=${token}`;
       return res.send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>ログイン完了</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -111,13 +172,10 @@ router.get(
   <a id="openApp" href="${deepLink}" style="display:inline-block;padding:16px 40px;background:#1775ee;color:white;border-radius:30px;text-decoration:none;font-size:16px;font-weight:600;">アプリを開く</a>
   <p style="font-size:14px;color:#666;margin-top:20px;">ボタンが動作しない場合は、手動でアプリに戻ってください</p>
   <script>
-    // 方法1: iframeでスキームを開く（Safariで最も確実）
     var iframe = document.createElement('iframe');
     iframe.style.display = 'none';
     iframe.src = '${deepLink}';
     document.body.appendChild(iframe);
-
-    // 方法2: window.locationでも試行
     setTimeout(function() {
       window.location.replace('${deepLink}');
     }, 500);
@@ -125,7 +183,7 @@ router.get(
 </body></html>`);
     }
 
-    res.redirect(`${process.env.FRONTEND_URL}/auth/success?token=${token}`);
+    res.redirect(`${process.env.FRONTEND_URL}/auth/success`);
   }
 );
 

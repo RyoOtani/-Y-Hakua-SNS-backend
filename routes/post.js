@@ -5,11 +5,17 @@ const Comment = require("../models/Comment");
 const Notification = require("../models/Notification");
 const { saveHashtags, getTodayDate } = require("./hashtag");
 const redisClient = require("../redisClient");
+const { authenticate } = require("../middleware/auth");
 
 //create a post
-router.post("/", async (req, res) => {
-  const newPost = new Post(req.body);
+router.post("/", authenticate, async (req, res) => {
   try {
+    // ホワイトリスト方式で投稿作成
+    const newPost = new Post({
+      userId: req.user._id,
+      desc: req.body.desc,
+      img: req.body.img,
+    });
     const savedPost = await newPost.save();
 
     // Extract and save hashtags from the post description
@@ -18,7 +24,7 @@ router.post("/", async (req, res) => {
     }
 
     // 投稿者のフォロワーを取得して通知を送る
-    const user = await User.findById(req.body.userId);
+    const user = await User.findById(req.user._id);
     if (user && user.followers && user.followers.length > 0) {
       const io = req.app.get('io');
       user.followers.forEach(followerId => {
@@ -33,54 +39,60 @@ router.post("/", async (req, res) => {
 
     return res.status(200).json(savedPost);
   } catch (err) {
-    return res.status(500).json(err);
+    console.error('Post create error:', err);
+    return res.status(500).json({ error: '投稿の作成に失敗しました' });
   }
 });
 
 //update a post
-router.put("/:id", async (req, res) => {
+router.put("/:id", authenticate, async (req, res) => {
   try {
-    //投稿したidを取得
     const post = await Post.findById(req.params.id);
-    if (post.userId === req.body.userId) {
-      await post.updateOne({ $set: req.body });
-      res.status(200).json("the post has been updated");
-    } else {
-      res.status(403).json("you can update only your post");
+    if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
+    if (post.userId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: "自分の投稿のみ更新できます" });
     }
+    // ホワイトリスト方式で更新
+    const allowedFields = ['desc', 'img'];
+    const updates = {};
+    for (const key of allowedFields) {
+      if (req.body[key] !== undefined) updates[key] = req.body[key];
+    }
+    await post.updateOne({ $set: updates });
+    res.status(200).json({ message: "投稿が更新されました" });
   } catch (err) {
-    res.status(403).json(err);
+    console.error('Post update error:', err);
+    res.status(500).json({ error: '投稿の更新に失敗しました' });
   }
 });
 
 //delete a post
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", authenticate, async (req, res) => {
   try {
-    //投稿したidを取得
     const post = await Post.findById(req.params.id);
     if (!post) {
-      return res.status(404).json("Post not found");
+      return res.status(404).json({ error: "投稿が見つかりません" });
     }
-    // ObjectIdを文字列に変換して比較
-    if (post.userId.toString() === req.body.userId) {
-      await post.deleteOne();
-      res.status(200).json("the post has been deleted");
-    } else {
-      res.status(403).json("you can delete only your post");
+    if (post.userId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: "自分の投稿のみ削除できます" });
     }
+    await post.deleteOne();
+    res.status(200).json({ message: "投稿が削除されました" });
   } catch (err) {
     console.error("Delete post error:", err);
-    res.status(500).json(err);
+    res.status(500).json({ error: '投稿の削除に失敗しました' });
   }
 });
 
 //like/dislike a post
-router.put("/:id/like", async (req, res) => {
+router.put("/:id/like", authenticate, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
+    if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
+    const userId = req.user._id.toString();
     //まだ投稿にいいねが押されていなかったら
-    if (!post.likes.includes(req.body.userId)) {
-      await post.updateOne({ $push: { likes: req.body.userId } });
+    if (!post.likes.includes(userId)) {
+      await post.updateOne({ $push: { likes: userId } });
 
       // いいねランキング用（日本時間3:00区切りの日付キー）をRedisで更新
       try {
@@ -92,9 +104,9 @@ router.put("/:id/like", async (req, res) => {
       }
 
       // 通知作成 & 送信 (自分の投稿以外)
-      if (post.userId.toString() !== req.body.userId) {
+      if (post.userId.toString() !== userId) {
         const notification = new Notification({
-          sender: req.body.userId,
+          sender: userId,
           receiver: post.userId,
           type: "like",
           post: post._id,
@@ -104,7 +116,7 @@ router.put("/:id/like", async (req, res) => {
         // Redis sync
         try {
           // Fetch sender details to store in Redis as well (to avoid multiple lookups during retrieval)
-          const sender = await User.findById(req.body.userId);
+          const sender = await User.findById(userId);
           const notificationData = {
             _id: savedNotification._id,
             sender: {
@@ -125,21 +137,21 @@ router.put("/:id/like", async (req, res) => {
         }
 
         const io = req.app.get('io');
-        const sender = await User.findById(req.body.userId);
+        const sender = await User.findById(userId);
 
         io.to(post.userId.toString()).emit("getNotification", {
-          senderId: req.body.userId,
+          senderId: userId,
           senderName: sender.username,
           type: "like",
           postId: post._id,
         });
       }
 
-      res.status(200).json("The post has been liked");
+      res.status(200).json({ message: "いいねしました" });
       //すでにいいねが押されていたら
     } else {
       //いいねしているユーザーを取り除く
-      await post.updateOne({ $pull: { likes: req.body.userId } });
+      await post.updateOne({ $pull: { likes: userId } });
       // ランキングも可能であればデクリメント（ベストエフォート）
       try {
         const today = getTodayDate();
@@ -147,10 +159,11 @@ router.put("/:id/like", async (req, res) => {
       } catch (redisErr) {
         console.error("Redis like ranking decr error:", redisErr);
       }
-      res.status(200).json("The post has been disliked");
+      res.status(200).json({ message: "いいねを取り消しました" });
     }
   } catch (err) {
-    res.status(500).json(err);
+    console.error('Like error:', err);
+    res.status(500).json({ error: 'いいね処理に失敗しました' });
   }
 });
 
@@ -171,35 +184,42 @@ router.put("/:id/like", async (req, res) => {
 router.get("/timeline/all", async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
     const skip = (page - 1) * limit;
-
     const allPosts = await Post.aggregate([
+      { $sort: { createdAt: -1 } },
+      { $skip: skip },
+      { $limit: limit },
       {
         $lookup: {
           from: "users",
           localField: "userId",
           foreignField: "_id",
-          as: "userId"
+          as: "user"
         }
       },
+      { $unwind: "$user" },
       {
-        $unwind: "$userId"
-      },
-      {
-        $sort: { createdAt: -1 }
-      },
-      {
-        $skip: skip
-      },
-      {
-        $limit: limit
+        $project: {
+          desc: 1,
+          img: 1,
+          likes: 1,
+          comment: 1,
+          isClassroom: 1,
+          createdAt: 1,
+          updatedAt: 1,
+          user: {
+            _id: "$user._id",
+            username: "$user.username",
+            profilePicture: "$user.profilePicture"
+          }
+        }
       }
     ]);
     return res.status(200).json(allPosts);
   } catch (err) {
     console.error("Error in /timeline/all:", err);
-    return res.status(500).json(err);
+    return res.status(500).json({ error: 'タイムラインの取得に失敗しました' });
   }
 });
 
@@ -211,7 +231,7 @@ router.get("/profile/:username", async (req, res) => {
       return res.status(404).json("User not found");
     }
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
     const skip = (page - 1) * limit;
 
     const posts = await Post.find({ userId: user._id })
@@ -223,7 +243,7 @@ router.get("/profile/:username", async (req, res) => {
     return res.status(200).json(posts);
   } catch (err) {
     console.error("Error in /profile/:username:", err);
-    return res.status(500).json(err);
+    return res.status(500).json({ error: 'プロフィール投稿の取得に失敗しました' });
   }
 });
 
@@ -266,7 +286,7 @@ router.get('/search', async (req, res) => {
     res.json(posts);
   } catch (err) {
     console.error("Post search error:", err);
-    res.status(500).json(err);
+    res.status(500).json({ error: '検索に失敗しました' });
   }
 });
 
@@ -383,7 +403,7 @@ router.get("/like-ranking", async (req, res) => {
     return res.status(200).json(ranking);
   } catch (err) {
     console.error("Error in /like-ranking:", err);
-    return res.status(500).json(err);
+    return res.status(500).json({ error: 'ランキングの取得に失敗しました' });
   }
 });
 
@@ -391,19 +411,28 @@ router.get("/like-ranking", async (req, res) => {
 router.get("/:id", async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
+    if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
     res.status(200).json(post);
   } catch (err) {
-    res.status(500).json(err);
+    console.error('Get post error:', err);
+    res.status(500).json({ error: '投稿の取得に失敗しました' });
   }
 });
 
 //コメントを作成する
-router.post("/:id/comment", async (req, res) => {
+router.post("/:id/comment", authenticate, async (req, res) => {
   try {
+    if (!req.body.desc || req.body.desc.trim().length === 0) {
+      return res.status(400).json({ error: 'コメント内容は必須です' });
+    }
+    if (req.body.desc.length > 500) {
+      return res.status(400).json({ error: 'コメントは500文字以内です' });
+    }
+    const userId = req.user._id;
     // コメントを作成
     const newComment = new Comment({
       postId: req.params.id,
-      userId: req.body.userId,
+      userId: userId,
       desc: req.body.desc,
       img: req.body.img,
     });
@@ -415,9 +444,9 @@ router.post("/:id/comment", async (req, res) => {
     });
 
     // 通知作成 & 送信 (自分の投稿以外)
-    if (post.userId.toString() !== req.body.userId) {
+    if (post.userId.toString() !== userId.toString()) {
       const notification = new Notification({
-        sender: req.body.userId,
+        sender: userId,
         receiver: post.userId,
         type: "comment",
         post: post._id,
@@ -426,7 +455,7 @@ router.post("/:id/comment", async (req, res) => {
 
       // Redis sync
       try {
-        const sender = await User.findById(req.body.userId);
+        const sender = await User.findById(userId);
         const notificationData = {
           _id: savedNotification._id,
           sender: {
@@ -441,16 +470,16 @@ router.post("/:id/comment", async (req, res) => {
           isRead: false
         };
         await redisClient.lPush(`notifications:${post.userId}`, JSON.stringify(notificationData));
-        await redisClient.lTrim(`notifications:${post.userId}`, 0, 49); // Keep only last 50
+        await redisClient.lTrim(`notifications:${post.userId}`, 0, 49);
       } catch (redisErr) {
         console.error("Redis notification sync error (comment):", redisErr);
       }
 
       const io = req.app.get('io');
-      const sender = await User.findById(req.body.userId);
+      const sender = await User.findById(userId);
 
       io.to(post.userId.toString()).emit("getNotification", {
-        senderId: req.body.userId,
+        senderId: userId,
         senderName: sender.username,
         type: "comment",
         postId: post._id,
@@ -459,7 +488,8 @@ router.post("/:id/comment", async (req, res) => {
 
     return res.status(200).json(savedComment);
   } catch (err) {
-    return res.status(500).json(err);
+    console.error('Comment create error:', err);
+    return res.status(500).json({ error: 'コメントの作成に失敗しました' });
   }
 });
 
@@ -471,33 +501,32 @@ router.get("/:id/comments", async (req, res) => {
       .sort({ createdAt: -1 });
     res.status(200).json(comments);
   } catch (err) {
-    res.status(500).json(err);
+    console.error('Get comments error:', err);
+    res.status(500).json({ error: 'コメントの取得に失敗しました' });
   }
 });
 
 // コメントを削除する
-router.delete("/:id/comment/:commentId", async (req, res) => {
+router.delete("/:id/comment/:commentId", authenticate, async (req, res) => {
   try {
     const comment = await Comment.findById(req.params.commentId);
-    if (!comment) return res.status(404).json("コメントが見つかりません");
+    if (!comment) return res.status(404).json({ error: "コメントが見つかりません" });
 
     // 削除権限の確認: コメント投稿者のみ
-    // 将来的にはPost投稿者も削除できるように拡張可能
-    if (comment.userId.toString() === req.body.userId) {
-      await comment.deleteOne();
-
-      // 該当する投稿のコメント数をデクリメント
-      await Post.findByIdAndUpdate(req.params.id, {
-        $inc: { comment: -1 },
-      });
-
-      res.status(200).json("コメントが削除されました");
-    } else {
-      res.status(403).json("自分のコメントのみ削除できます");
+    if (comment.userId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ error: "自分のコメントのみ削除できます" });
     }
+    await comment.deleteOne();
+
+    // 該当する投稿のコメント数をデクリメント
+    await Post.findByIdAndUpdate(req.params.id, {
+      $inc: { comment: -1 },
+    });
+
+    res.status(200).json({ message: "コメントが削除されました" });
   } catch (err) {
     console.error("Delete comment error:", err);
-    res.status(500).json(err);
+    res.status(500).json({ error: 'コメントの削除に失敗しました' });
   }
 });
 

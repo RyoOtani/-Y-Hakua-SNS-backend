@@ -96,6 +96,7 @@ require('dotenv').config();
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const User = require('../models/User');
+const { encrypt } = require('../utils/crypto');
 
 passport.use(
   new GoogleStrategy(
@@ -120,8 +121,6 @@ passport.use(
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        console.log(`[GoogleStrategy] User ${profile.id} - refreshToken received from Google: ${refreshToken ? 'exists' : 'MISSING'}`);
-
         let user = await User.findOne({ googleId: profile.id });
 
         if (user) {
@@ -130,13 +129,11 @@ passport.use(
           user.email = profile.emails[0].value;
           user.profilePicture = profile.photos[0]?.value;
           user.accessToken = accessToken;
-          // Only update refreshToken if a new one is provided by Google
-          // or if the existing one is missing.
+          // Only update refreshToken if provided; encrypt before storing.
           if (refreshToken) {
-            user.refreshToken = refreshToken;
+            user.refreshToken = encrypt(refreshToken);
           }
           await user.save();
-          console.log(`[GoogleStrategy] Existing user ${user.id} - refreshToken after save: ${user.refreshToken ? 'exists' : 'MISSING'}`);
         } else {
           // New user, create them
           user = new User({
@@ -145,10 +142,9 @@ passport.use(
             googleId: profile.id,
             profilePicture: profile.photos[0]?.value,
             accessToken: accessToken,
-            refreshToken: refreshToken, // Save if provided on initial login
+            refreshToken: refreshToken ? encrypt(refreshToken) : undefined, // Save if provided on initial login
           });
           await user.save();
-          console.log(`[GoogleStrategy] New user ${user.id} - refreshToken after save: ${user.refreshToken ? 'exists' : 'MISSING'}`);
         }
         return done(null, user);
       } catch (error) {
@@ -166,7 +162,7 @@ const { Strategy: JwtStrategy, ExtractJwt } = require('passport-jwt');
 // JWT Strategy for protecting routes
 const jwtOptions = {
   jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-  secretOrKey: process.env.JWT_SECRET || 'your-jwt-secret',
+  secretOrKey: process.env.JWT_SECRET,
 };
 
 passport.use(
@@ -190,11 +186,7 @@ passport.serializeUser((user, done) => {
 passport.deserializeUser(async (id, done) => {
   try {
     const user = await User.findById(id);
-    if (user) {
-      console.log(`[deserializeUser] User ${user.id} refreshToken: ${user.refreshToken ? 'exists' : 'MISSING'}`);
-    } else {
-      console.log(`[deserializeUser] User with ID ${id} not found.`);
-    }
+    // Do not log sensitive token presence
     done(null, user);
   } catch (err) {
     console.error(`[deserializeUser] Error deserializing user ${id}:`, err);

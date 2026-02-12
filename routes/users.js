@@ -2,40 +2,51 @@ const router = require("express").Router();
 const User = require("../models/User");
 const passport = require("passport");
 const redisClient = require("../redisClient");
+const { authenticate } = require("../middleware/auth");
+
+// 機密フィールドを除外するヘルパー
+const sanitizeUser = (user) => {
+  if (!user) return null;
+  const obj = user._doc || user;
+  const { password, accessToken, refreshToken, updatedAt, __v, ...safe } = obj;
+  return safe;
+};
 
 //CRUD
-//ユーザー情報の更新
-
-router.put("/:id", async (req, res) => {
-  if (req.body.userId === req.params.id || req.body.isAdmin) {
-    try {
-      const user = await User.findByIdAndUpdate(req.params.id, {
-        $set: req.body,
-      });
-      res.status(200).json("ユーザー情報が更新されました。")
-    } catch (err) {
-      return res.status(500).json(err);
+//ユーザー情報の更新（認証必須 + ホワイトリスト）
+router.put("/:id", authenticate, async (req, res) => {
+  // トークンから取得したユーザーIDで認可判定
+  if (req.user._id.toString() !== req.params.id) {
+    return res.status(403).json({ error: "自分のアカウントのみ情報を更新できます。" });
+  }
+  try {
+    // 更新可能なフィールドをホワイトリスト方式で制限
+    const allowedFields = ['username', 'email', 'desc', 'profilePicture', 'coverPicture', 'backgroundColor', 'font'];
+    const updates = {};
+    for (const key of allowedFields) {
+      if (req.body[key] !== undefined) {
+        updates[key] = req.body[key];
+      }
     }
-  } else {
-    return res
-      .status(403)
-      .json("自分のアカウントのみ情報を更新できます。")
+    await User.findByIdAndUpdate(req.params.id, { $set: updates });
+    res.status(200).json({ message: "ユーザー情報が更新されました。" });
+  } catch (err) {
+    console.error('User update error:', err);
+    return res.status(500).json({ error: 'ユーザー更新に失敗しました' });
   }
 });
 
-//ユーザー情報の削除
-router.delete("/:id", async (req, res) => {
-  if (req.body.userId === req.params.id || req.body.isAdmin) {
-    try {
-      const user = await User.findByIdAndDelete(req.params.id);
-      res.status(200).json("ユーザー情報が削除されました。")
-    } catch (err) {
-      return res.status(500).json(err);
-    }
-  } else {
-    return res
-      .status(403)
-      .json("自分のアカウントのみ情報を削除できます。")
+//ユーザー情報の削除（認証必須）
+router.delete("/:id", authenticate, async (req, res) => {
+  if (req.user._id.toString() !== req.params.id) {
+    return res.status(403).json({ error: "自分のアカウントのみ情報を削除できます。" });
+  }
+  try {
+    await User.findByIdAndDelete(req.params.id);
+    res.status(200).json({ message: "ユーザー情報が削除されました。" });
+  } catch (err) {
+    console.error('User delete error:', err);
+    return res.status(500).json({ error: 'ユーザー削除に失敗しました' });
   }
 });
 
@@ -98,13 +109,13 @@ router.get("/", async (req, res) => {
       : await User.findOne({ username: username });
 
     if (!user) {
-      return res.status(404).json("User not found");
+      return res.status(404).json({ error: "User not found" });
     }
 
-    const { password, updatedAt, ...other } = user._doc;
-    return res.status(200).json(other);
+    return res.status(200).json(sanitizeUser(user));
   } catch (err) {
-    return res.status(500).json(err);
+    console.error('User fetch error:', err);
+    return res.status(500).json({ error: 'ユーザー取得に失敗しました' });
   }
 
 });
@@ -132,41 +143,45 @@ router.get("/", async (req, res) => {
 // });
 
 //follow a user
-router.put("/:id/follow", async (req, res) => {
-  if (req.body.userId !== req.params.id) {
-    try {
-      const user = await User.findById(req.params.id);
-      const currentUser = await User.findById(req.body.userId);
-      //フォロワーにいなかったらフォローできる
-      if (!user.followers.includes(req.body.userId)) {
-        await user.updateOne({
-          $push: {
-            followers: req.body.userId,
-          }
-        });
-        await currentUser.updateOne({
-          $push: {
-            following: req.params.id
-          }
-        });
-
-        // Redis sync
-        try {
-          await redisClient.sAdd(`followers:${req.params.id}`, req.body.userId);
-          await redisClient.sAdd(`following:${req.body.userId}`, req.params.id);
-        } catch (redisErr) {
-          console.error("Redis sync error (follow):", redisErr);
-        }
-
-        res.status(200).json("user has been followd");
-      } else {
-        return res.status(403).json("you allready follow this user");
-      }
-    } catch (err) {
-      return res.status(500).json(err);
+router.put("/:id/follow", authenticate, async (req, res) => {
+  const currentUserId = req.user._id.toString();
+  if (currentUserId === req.params.id) {
+    return res.status(400).json({ error: "自分をフォローすることはできません" });
+  }
+  try {
+    const user = await User.findById(req.params.id);
+    const currentUser = await User.findById(currentUserId);
+    if (!user || !currentUser) {
+      return res.status(404).json({ error: "ユーザーが見つかりません" });
     }
-  } else {
-    return res.status(500).json("cant follow yourself");
+    //フォロワーにいなかったらフォローできる
+    if (!user.followers.includes(currentUserId)) {
+      await user.updateOne({
+        $push: {
+          followers: currentUserId,
+        }
+      });
+      await currentUser.updateOne({
+        $push: {
+          following: req.params.id
+        }
+      });
+
+      // Redis sync
+      try {
+        await redisClient.sAdd(`followers:${req.params.id}`, currentUserId);
+        await redisClient.sAdd(`following:${currentUserId}`, req.params.id);
+      } catch (redisErr) {
+        console.error("Redis sync error (follow):", redisErr);
+      }
+
+      res.status(200).json({ message: "ユーザーをフォローしました" });
+    } else {
+      return res.status(403).json({ error: "すでにこのユーザーをフォローしています" });
+    }
+  } catch (err) {
+    console.error('Follow error:', err);
+    return res.status(500).json({ error: 'フォローに失敗しました' });
   }
 });
 
@@ -193,33 +208,37 @@ router.put("/:id/follow", async (req, res) => {
 // });
 
 //unfollow a user
-router.put("/:id/unfollow", async (req, res) => {
-  if (req.body.userId !== req.params.id) {
-    try {
-      const user = await User.findById(req.params.id);
-      const currentUser = await User.findById(req.body.userId);
-      //フォロワーにいたらフォロー外せる
-      if (user.followers.includes(req.body.userId)) {
-        await user.updateOne({ $pull: { followers: req.body.userId } });
-        await currentUser.updateOne({ $pull: { following: req.params.id } });
-
-        // Redis sync
-        try {
-          await redisClient.sRem(`followers:${req.params.id}`, req.body.userId);
-          await redisClient.sRem(`following:${req.body.userId}`, req.params.id);
-        } catch (redisErr) {
-          console.error("Redis sync error (unfollow):", redisErr);
-        }
-
-        res.status(200).json("user has been unfollowd");
-      } else {
-        return res.status(403).json("you dont follow this user");
-      }
-    } catch (err) {
-      return res.status(500).json(err);
+router.put("/:id/unfollow", authenticate, async (req, res) => {
+  const currentUserId = req.user._id.toString();
+  if (currentUserId === req.params.id) {
+    return res.status(400).json({ error: "自分をフォロー解除することはできません" });
+  }
+  try {
+    const user = await User.findById(req.params.id);
+    const currentUser = await User.findById(currentUserId);
+    if (!user || !currentUser) {
+      return res.status(404).json({ error: "ユーザーが見つかりません" });
     }
-  } else {
-    return res.status(500).json("cant unfollow yourself");
+    //フォロワーにいたらフォロー外せる
+    if (user.followers.includes(currentUserId)) {
+      await user.updateOne({ $pull: { followers: currentUserId } });
+      await currentUser.updateOne({ $pull: { following: req.params.id } });
+
+      // Redis sync
+      try {
+        await redisClient.sRem(`followers:${req.params.id}`, currentUserId);
+        await redisClient.sRem(`following:${currentUserId}`, req.params.id);
+      } catch (redisErr) {
+        console.error("Redis sync error (unfollow):", redisErr);
+      }
+
+      res.status(200).json({ message: "フォローを解除しました" });
+    } else {
+      return res.status(403).json({ error: "このユーザーをフォローしていません" });
+    }
+  } catch (err) {
+    console.error('Unfollow error:', err);
+    return res.status(500).json({ error: 'フォロー解除に失敗しました' });
   }
 });
 
@@ -235,11 +254,13 @@ router.get("/search", async (req, res) => {
         { username: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: "i" } },
         { name: { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: "i" } },
       ],
-    }).limit(20);
+    })
+    .select('username profilePicture desc')
+    .limit(20);
 
     res.json(users);
   } catch (err) {
-    console.error(err);
+    console.error('Search error:', err);
     res.status(500).json({ error: "ユーザー検索に失敗しました" });
   }
 });

@@ -1,10 +1,11 @@
 const router = require("express").Router();
 const Notification = require("../models/Notification");
 const redisClient = require("../redisClient");
+const { authenticate } = require("../middleware/auth");
 
-// Get notifications for a user (Redis優先読み込み)
-router.get("/:userId", async (req, res) => {
-    const userId = req.params.userId;
+// Get notifications for authenticated user (Redis優先読み込み)
+router.get("/", authenticate, async (req, res) => {
+    const userId = req.user._id.toString();
 
     try {
         let notifications = [];
@@ -25,7 +26,7 @@ router.get("/:userId", async (req, res) => {
         }
 
         // 2. Redisに無ければMongoDBから取得し、Redisへシード
-        notifications = await Notification.find({ receiver: userId })
+        notifications = await Notification.find({ receiver: req.user._id })
             .populate("sender", "username profilePicture")
             .populate("post", "desc img")
             .sort({ createdAt: -1 })
@@ -51,77 +52,86 @@ router.get("/:userId", async (req, res) => {
 
         res.status(200).json(notifications);
     } catch (err) {
-        res.status(500).json(err);
+        console.error("Notification fetch error:", err);
+        res.status(500).json({ error: "通知の取得に失敗しました" });
     }
 });
 
 // Mark notification as read
-router.put("/:id/read", async (req, res) => {
+router.put("/:id/read", authenticate, async (req, res) => {
     try {
-        const notification = await Notification.findByIdAndUpdate(
-            req.params.id,
-            { isRead: true },
-            { new: true }
-        );
+        const notification = await Notification.findById(req.params.id);
+        if (!notification) {
+            return res.status(404).json({ error: "通知が見つかりません" });
+        }
 
-        // Redis 側もできるだけ整合させる（完全一致でなくベストエフォート）
-        if (notification) {
-            const userId = notification.receiver.toString();
-            try {
-                const cached = await redisClient.lRange(
-                    `notifications:${userId}`,
-                    0,
-                    -1
+        // 自分の通知のみ既読にできる
+        if (notification.receiver.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ error: "この通知にアクセスする権限がありません" });
+        }
+
+        notification.isRead = true;
+        await notification.save();
+
+        // Redis 側もできるだけ整合させる（ベストエフォート）
+        const userId = req.user._id.toString();
+        try {
+            const cached = await redisClient.lRange(
+                `notifications:${userId}`,
+                0,
+                -1
+            );
+            if (cached && cached.length > 0) {
+                const updatedList = cached.map((item) => {
+                    const parsed = JSON.parse(item);
+                    if (
+                        parsed._id &&
+                        parsed._id.toString() === notification._id.toString()
+                    ) {
+                        parsed.isRead = true;
+                    }
+                    return JSON.stringify(parsed);
+                });
+
+                const pipeline = redisClient.multi();
+                pipeline.del(`notifications:${userId}`);
+                updatedList.forEach((v) =>
+                    pipeline.lPush(`notifications:${userId}`, v)
                 );
-                if (cached && cached.length > 0) {
-                    const updatedList = cached.map((item) => {
-                        const parsed = JSON.parse(item);
-                        if (
-                            parsed._id &&
-                            parsed._id.toString() === notification._id.toString()
-                        ) {
-                            parsed.isRead = true;
-                        }
-                        return JSON.stringify(parsed);
-                    });
-
-                    const pipeline = redisClient.multi();
-                    pipeline.del(`notifications:${userId}`);
-                    updatedList.forEach((v) =>
-                        pipeline.lPush(`notifications:${userId}`, v)
-                    );
-                    pipeline.lTrim(`notifications:${userId}`, 0, 49);
-                    await pipeline.exec();
-                }
-            } catch (redisErr) {
-                console.error("Redis sync error (notification read):", redisErr);
+                pipeline.lTrim(`notifications:${userId}`, 0, 49);
+                await pipeline.exec();
             }
+        } catch (redisErr) {
+            console.error("Redis sync error (notification read):", redisErr);
         }
 
         res.status(200).json(notification);
     } catch (err) {
-        res.status(500).json(err);
+        console.error("Notification read error:", err);
+        res.status(500).json({ error: "既読の更新に失敗しました" });
     }
 });
 
-// Mark ALL notifications as read for a user
-router.put("/read-all/:userId", async (req, res) => {
+// Mark ALL notifications as read for authenticated user
+router.put("/read-all", authenticate, async (req, res) => {
     try {
+        const userId = req.user._id.toString();
         await Notification.updateMany(
-            { receiver: req.params.userId, isRead: false },
+            { receiver: req.user._id, isRead: false },
             { $set: { isRead: true } }
         );
 
         // Redis 側は一旦破棄し、次回取得時にMongoから再シードさせる
         try {
-            await redisClient.del(`notifications:${req.params.userId}`);
+            await redisClient.del(`notifications:${userId}`);
         } catch (redisErr) {
             console.error("Redis sync error (notification read-all):", redisErr);
         }
 
-        res.status(200).json("All notifications marked as read");
+        res.status(200).json({ message: "全ての通知を既読にしました" });
     } catch (err) {
-        res.status(500).json(err);
+        console.error("Notification read-all error:", err);
+        res.status(500).json({ error: "既読の更新に失敗しました" });
     }
 });
 
