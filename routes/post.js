@@ -210,6 +210,7 @@ router.get("/timeline/all", async (req, res) => {
         $project: {
           desc: 1,
           img: 1,
+          video: 1,
           likes: 1,
           comment: 1,
           isClassroom: 1,
