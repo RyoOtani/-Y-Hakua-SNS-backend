@@ -9,6 +9,7 @@ const session = require('express-session');
 const http = require('http');
 const { Server } = require("socket.io");
 const { Redis } = require('@upstash/redis');
+const { initializeFirebaseAdmin } = require('./utils/firebaseAdmin');
 dotenv.config();
 
 const app = express();
@@ -181,6 +182,9 @@ const redis = new Redis({
 
 // Passport設定
 require('./config/passport');
+
+// Firebase Admin 初期化（未設定時は自動的に無効化）
+initializeFirebaseAdmin();
 
 // ルート
 app.use('/api/auth', require('./routes/auth'));

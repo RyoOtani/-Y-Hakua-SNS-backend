@@ -8,7 +8,7 @@ const { authenticate } = require("../middleware/auth");
 const sanitizeUser = (user) => {
   if (!user) return null;
   const obj = user._doc || user;
-  const { password, accessToken, refreshToken, updatedAt, __v, ...safe } = obj;
+  const { password, accessToken, refreshToken, fcmToken, updatedAt, __v, ...safe } = obj;
   return safe;
 };
 
@@ -268,8 +268,42 @@ router.get("/search", async (req, res) => {
 // Google認証によるユーザー情報の取得
 router.get("/me", passport.authenticate('jwt', { session: false }), (req, res) => {
   // パスワードを除いてユーザー情報を返す
-  const { password, updatedAt, ...other } = req.user._doc;
+  const { password, accessToken, refreshToken, fcmToken, updatedAt, ...other } = req.user._doc;
   res.status(200).json(other);
+});
+
+// Firebase Cloud Messaging トークン登録
+router.put('/me/push-token', authenticate, async (req, res) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+
+  if (!token) {
+    return res.status(400).json({ error: 'token は必須です。' });
+  }
+
+  try {
+    await User.findByIdAndUpdate(req.user._id, {
+      $set: { fcmToken: token },
+    });
+
+    return res.status(200).json({ message: 'FCMトークンを登録しました。' });
+  } catch (err) {
+    console.error('Push token register error:', err);
+    return res.status(500).json({ error: 'FCMトークン登録に失敗しました。' });
+  }
+});
+
+// Firebase Cloud Messaging トークン削除
+router.delete('/me/push-token', authenticate, async (req, res) => {
+  try {
+    await User.findByIdAndUpdate(req.user._id, {
+      $set: { fcmToken: null },
+    });
+
+    return res.status(200).json({ message: 'FCMトークンを削除しました。' });
+  } catch (err) {
+    console.error('Push token delete error:', err);
+    return res.status(500).json({ error: 'FCMトークン削除に失敗しました。' });
+  }
 });
 
 //get friends (following list)

@@ -6,6 +6,7 @@ const Notification = require("../models/Notification");
 const { saveHashtags, getTodayDate } = require("./hashtag");
 const redisClient = require("../redisClient");
 const { authenticate } = require("../middleware/auth");
+const { sendPushToUser } = require("../utils/pushNotification");
 
 //create a post
 router.post("/", authenticate, async (req, res) => {
@@ -151,6 +152,19 @@ router.put("/:id/like", authenticate, async (req, res) => {
           senderName: sender.username,
           type: "like",
           postId: post._id,
+        });
+
+        sendPushToUser({
+          receiverId: post.userId,
+          title: '新しいいいね',
+          body: `${sender.username} さんがあなたの投稿にいいねしました`,
+          data: {
+            type: 'like',
+            postId: post._id,
+            senderId: userId,
+          },
+        }).catch((pushErr) => {
+          console.error('FCM notify error (like):', pushErr);
         });
       }
 
@@ -491,6 +505,19 @@ router.post("/:id/comment", authenticate, async (req, res) => {
         senderName: sender.username,
         type: "comment",
         postId: post._id,
+      });
+
+      sendPushToUser({
+        receiverId: post.userId,
+        title: '新しいコメント',
+        body: `${sender.username} さんがあなたの投稿にコメントしました`,
+        data: {
+          type: 'comment',
+          postId: post._id,
+          senderId: userId,
+        },
+      }).catch((pushErr) => {
+        console.error('FCM notify error (comment):', pushErr);
       });
     }
 
