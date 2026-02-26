@@ -2,14 +2,11 @@ const router = require('express').Router();
 const LearningSession = require('../models/LearningSession');
 const LearningGoal = require('../models/LearningGoal');
 const User = require('../models/User');
-const { Redis } = require('@upstash/redis');
+const redisClient = require('../redisClient');
 const { authenticate } = require('../middleware/auth');
 
-// Redisクライアントの初期化
-const redis = new Redis({
-    url: process.env.UPSTASH_REDIS_REST_URL,
-    token: process.env.UPSTASH_REDIS_REST_TOKEN,
-});
+// Redis client (falls back to mock when env vars are missing)
+const redis = redisClient;
 
 // Redisキーの生成ヘルパー
 const getWeeklyRankingKey = () => {

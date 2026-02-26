@@ -8,7 +8,7 @@ const passport = require('passport');
 const session = require('express-session');
 const http = require('http');
 const { Server } = require("socket.io");
-const { Redis } = require('@upstash/redis');
+const redisClient = require('./redisClient');
 const { initializeFirebaseAdmin } = require('./utils/firebaseAdmin');
 dotenv.config();
 
@@ -173,12 +173,8 @@ mongoose.connect(process.env.MONGO_URL, {
   .catch(err => console.error('MongoDB connection error:', err));
 
 
-// Upstash Redis (REST) - credentials should be set via env vars on Render/Vercel/etc.
-// UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
-});
+// Upstash Redis (REST) client (falls back to mock when env vars are missing)
+// If you need Redis here, use redisClient.
 
 // Passport設定
 require('./config/passport');

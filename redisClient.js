@@ -1,5 +1,6 @@
 const dotenv = require("dotenv");
 const { Redis } = require("@upstash/redis");
+const { createClient } = require("redis");
 
 dotenv.config();
 
@@ -10,31 +11,69 @@ dotenv.config();
 //
 // 互換性のため、既存コードは `redisClient.xxx(...)` をこのインスタンスに対して呼び出す前提。
 let redisClient;
+let clientRef;
+
+const createMockClient = () => ({
+  get: async () => null,
+  set: async () => "OK",
+  del: async () => 1,
+  lRange: async () => [],
+  lPush: async () => 0,
+  lTrim: async () => "OK",
+  zIncrBy: async () => 0,
+  expire: async () => 1,
+  multi: () => ({
+    del: () => {},
+    lPush: () => {},
+    lTrim: () => {},
+    exec: async () => [],
+  }),
+});
+
+const sanitizeRedisUrl = (raw) => {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  const match = trimmed.match(/redis:\/\/[^\s]+/);
+  return match ? match[0] : trimmed;
+};
 
 try {
   if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
-    redisClient = new Redis({
+    clientRef = new Redis({
       url: process.env.UPSTASH_REDIS_REST_URL,
       token: process.env.UPSTASH_REDIS_REST_TOKEN,
     });
+  } else if (process.env.REDIS_URL) {
+    const redisUrl = sanitizeRedisUrl(process.env.REDIS_URL);
+    const client = createClient({
+      url: redisUrl,
+      socket: {
+        reconnectStrategy: () => false,
+      },
+    });
+    client.on("error", () => {
+      clientRef = createMockClient();
+    });
+    client.connect().catch(() => {
+      clientRef = createMockClient();
+    });
+    clientRef = client;
   } else {
-    // throw new Error("UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN is missing.");
-    console.warn("Display warning: UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN is missing. Redis functionality will be disabled.");
-    // Mock interface to prevent crashes
-    redisClient = {
-      get: async () => null,
-      set: async () => "OK",
-      del: async () => 1,
-      // Add other methods as needed or use a Proxy to catch all
-    };
+    clientRef = createMockClient();
   }
 } catch (error) {
-  console.error("Redis client initialization failed:", error);
-  redisClient = {
-      get: async () => null,
-      set: async () => "OK",
-      del: async () => 1,
-  };
+  clientRef = createMockClient();
 }
+
+redisClient = new Proxy({}, {
+  get: (_target, prop) => {
+    const active = clientRef || createMockClient();
+    const value = active[prop];
+    if (typeof value === "function") {
+      return value.bind(active);
+    }
+    return value;
+  },
+});
 
 module.exports = redisClient;
