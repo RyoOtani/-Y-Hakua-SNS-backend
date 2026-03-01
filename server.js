@@ -194,6 +194,7 @@ app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/hashtags', require('./routes/hashtag'));
 app.use('/api/security', require('./routes/security'));
 app.use('/api/learning', require('./routes/learning'));
+app.use('/api/notes', require('./routes/notes'));
 
 // サーバー起動
 const PORT = process.env.PORT || 8800;
