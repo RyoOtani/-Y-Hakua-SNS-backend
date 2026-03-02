@@ -7,6 +7,7 @@ const morgan = require('morgan');
 const passport = require('passport');
 const session = require('express-session');
 const http = require('http');
+const path = require('path');
 const { Server } = require("socket.io");
 const redisClient = require('./redisClient');
 const { initializeFirebaseAdmin } = require('./utils/firebaseAdmin');
@@ -181,6 +182,11 @@ require('./config/passport');
 
 // Firebase Admin 初期化（未設定時は自動的に無効化）
 initializeFirebaseAdmin();
+
+// プライバシーポリシーページ（認証不要の公開ページ）
+app.get('/privacy-policy', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'privacy-policy.html'));
+});
 
 // ルート
 app.use('/api/auth', require('./routes/auth'));
