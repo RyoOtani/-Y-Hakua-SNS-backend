@@ -20,7 +20,8 @@ const allowedOrigins = [
   process.env.FRONTEND_URL,
   "http://localhost:3000",
   "http://localhost:5173",
-  "https://y-hakua-sns-frontend-29cj.vercel.app"
+  "https://www.yapp.me",
+  "https://yapp.me"
 ].filter(Boolean);
 
 const io = new Server(server, {
