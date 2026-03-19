@@ -94,6 +94,9 @@ const userSchema = new mongoose.Schema(
     googleId: {
       type: String,
     },
+    appleId: {
+      type: String,
+    },
     profilePicture: {
       type: String,
     },

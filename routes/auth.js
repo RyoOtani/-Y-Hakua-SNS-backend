@@ -3,8 +3,16 @@ const passport = require('passport');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const rateLimit = require('express-rate-limit');
+const jwksClient = require('jwks-rsa');
 const router = express.Router();
 const User = require("../models/User");
+
+// Apple JWKS client for verifying Sign in with Apple tokens
+const appleJwksClient = jwksClient({
+  jwksUri: 'https://appleid.apple.com/auth/keys',
+  cache: true,
+  cacheMaxAge: 86400000, // 24 hours
+});
 
 // ログイン・登録用レート制限
 const authLimiter = rateLimit({
@@ -219,6 +227,270 @@ router.get(
     res.redirect(`${process.env.FRONTEND_URL}/auth/success?token=${token}`);
   }
 );
+
+// Apple OAuth Web ログイン（ブラウザ用）
+router.get('/apple', (req, res, next) => {
+  if (req.query.platform === 'mobile') {
+    req.session.oauthPlatform = 'mobile';
+    res.cookie('oauth_platform', 'mobile', {
+      maxAge: 5 * 60 * 1000,
+      httpOnly: true,
+      sameSite: 'lax',
+    });
+  }
+  next();
+}, (req, res) => {
+  try {
+    const redirectUri = `${process.env.API_URL || 'http://localhost:8800'}/api/auth/apple/callback`;
+    const clientId = process.env.APPLE_SERVICE_ID;
+    const responseType = 'code id_token';
+    const scope = 'openid email name';
+    const responseMode = 'form_post';
+
+    if (!clientId) {
+      return res.status(500).json({ error: 'Apple Service ID が設定されていません' });
+    }
+
+    const url = `https://appleid.apple.com/auth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=${encodeURIComponent(responseType)}&scope=${encodeURIComponent(scope)}&response_mode=${responseMode}&state=${req.session.id}`;
+
+    res.redirect(url);
+  } catch (error) {
+    console.error('Apple auth init error:', error);
+    res.status(500).json({ error: 'Apple ログイン初期化に失敗しました' });
+  }
+});
+
+// Apple Sign In ネイティブアプリ用（POST /apple で identityToken を受け取る）
+router.post('/apple', authLimiter, async (req, res) => {
+  try {
+    const { identityToken, fullName, email: clientEmail } = req.body;
+
+    if (!identityToken) {
+      return res.status(400).json({ error: 'identityToken は必須です' });
+    }
+
+    // 1. identityToken のヘッダーから kid を取得
+    const decodedHeader = jwt.decode(identityToken, { complete: true });
+    if (!decodedHeader) {
+      return res.status(400).json({ error: '無効な identityToken です' });
+    }
+
+    // 2. Apple の公開鍵を取得して検証
+    const key = await appleJwksClient.getSigningKey(decodedHeader.header.kid);
+    const signingKey = key.getPublicKey();
+
+    const payload = jwt.verify(identityToken, signingKey, {
+      algorithms: ['RS256'],
+      issuer: 'https://appleid.apple.com',
+    });
+
+    // audience のチェック
+    // ネイティブ: Bundle ID / Web: Service ID のどちらにも対応
+    const expectedAudiences = [process.env.APPLE_BUNDLE_ID, process.env.APPLE_SERVICE_ID].filter(Boolean);
+    if (expectedAudiences.length > 0 && !expectedAudiences.includes(payload.aud)) {
+      return res.status(401).json({
+        error: 'トークンの audience が一致しません',
+        details: { received: payload.aud, expected: expectedAudiences },
+      });
+    }
+
+    const appleId = payload.sub;
+    // Appleは初回以外 email を返さないことがあるためフォールバックを用意
+    const email = payload.email || clientEmail || `${appleId}@appleid.apple.com`;
+
+    // 3. appleId でユーザー検索
+    let user = await User.findOne({ appleId });
+
+    if (user) {
+      // 既存の Apple ユーザー
+      console.log('[Auth] Apple login success (existing)', { userId: user._id, email: user.email });
+    } else {
+      // 4. email でユーザー検索（既存ユーザーに Apple アカウントをリンク）
+      user = await User.findOne({ email });
+
+      if (user) {
+        user.appleId = appleId;
+        await user.save();
+        console.log('[Auth] Apple account linked to existing user', { userId: user._id, email });
+      } else {
+        // 5. 完全に新規ユーザー
+        let username = 'User';
+        if (fullName) {
+          const nameParts = [fullName.givenName, fullName.familyName].filter(Boolean);
+          if (nameParts.length > 0) {
+            username = nameParts.join(' ');
+          }
+        }
+
+        // ユーザー名の重複回避
+        const existingWithName = await User.findOne({ username });
+        if (existingWithName) {
+          username = `${username}_${appleId.slice(-5)}`;
+        }
+
+        user = new User({
+          username,
+          email: email,
+          appleId,
+        });
+        await user.save();
+        console.log('[Auth] Apple new user created', { userId: user._id, email });
+      }
+    }
+
+    // JWT 発行
+    const token = jwt.sign(
+      { id: user._id, email: user.email },
+      JWT_SECRET,
+      {
+        expiresIn: '7d',
+        issuer: JWT_ISSUER,
+        audience: JWT_AUDIENCE,
+      }
+    );
+
+    const { password: _, accessToken: _a, refreshToken: _r, ...userWithoutSensitive } = user._doc;
+    return res.status(200).json({ ...userWithoutSensitive, token });
+  } catch (err) {
+    if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Apple トークンの検証に失敗しました' });
+    }
+    console.error('Apple auth error:', err);
+    return res.status(500).json({ error: 'Apple ログインに失敗しました' });
+  }
+});
+
+// Apple OAuth コールバック（ブラウザ用）
+router.post('/apple/callback', async (req, res) => {
+  try {
+    const { id_token, code, user: userDataStr, state } = req.body;
+
+    // state の検証（CSRF保護）
+    if (state !== req.session.id) {
+      return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=invalid_state`);
+    }
+
+    let identityToken = id_token;
+    let userData = null;
+
+    // 最初のリクエストで id_token を受け取る場合
+    if (identityToken) {
+      try {
+        const decodedHeader = jwt.decode(identityToken, { complete: true });
+        if (!decodedHeader) {
+          return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=invalid_token`);
+        }
+
+        const key = await appleJwksClient.getSigningKey(decodedHeader.header.kid);
+        const signingKey = key.getPublicKey();
+
+        const payload = jwt.verify(identityToken, signingKey, {
+          algorithms: ['RS256'],
+          issuer: 'https://appleid.apple.com',
+        });
+
+        if (process.env.APPLE_SERVICE_ID && payload.aud !== process.env.APPLE_SERVICE_ID) {
+          return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=invalid_audience`);
+        }
+
+        // user フィールドはJSONの場合がある
+        if (userDataStr) {
+          try {
+            userData = typeof userDataStr === 'string' ? JSON.parse(userDataStr) : userDataStr;
+          } catch (e) {
+            console.log('Failed to parse user data:', e);
+          }
+        }
+
+        const appleId = payload.sub;
+        const email = payload.email;
+        const fullName = userData?.name;
+
+        // 3. appleId でユーザー検索
+        let user = await User.findOne({ appleId });
+
+        if (user) {
+          // 既存の Apple ユーザー
+          console.log('[Auth] Apple login success (existing)', { userId: user._id, email: user.email });
+        } else if (email) {
+          // 4. email でユーザー検索
+          user = await User.findOne({ email });
+
+          if (user) {
+            user.appleId = appleId;
+            await user.save();
+            console.log('[Auth] Apple account linked to existing user', { userId: user._id, email });
+          } else {
+            // 5. 完全に新規ユーザー
+            let username = 'User';
+            if (fullName) {
+              const nameParts = [fullName.firstName, fullName.lastName].filter(Boolean);
+              if (nameParts.length > 0) {
+                username = nameParts.join(' ');
+              }
+            }
+
+            const existingWithName = await User.findOne({ username });
+            if (existingWithName) {
+              username = `${username}_${appleId.slice(-5)}`;
+            }
+
+            user = new User({
+              username,
+              email: email || `${appleId}@appleid.apple.com`,
+              appleId,
+            });
+            await user.save();
+            console.log('[Auth] Apple new user created', { userId: user._id, email });
+          }
+        } else {
+          return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=no_email`);
+        }
+
+        // JWT 発行
+        const token = jwt.sign(
+          { id: user._id, email: user.email },
+          JWT_SECRET,
+          {
+            expiresIn: '7d',
+            issuer: JWT_ISSUER,
+            audience: JWT_AUDIENCE,
+          }
+        );
+
+        // ブラウザ用: HttpOnly Cookie で返す
+        res.cookie('auth_token', token, {
+          httpOnly: true,
+          secure: process.env.NODE_ENV === 'production',
+          sameSite: 'none',
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+          path: '/',
+        });
+
+        console.log('[Auth] Apple login success via browser', {
+          userId: user._id?.toString(),
+          email: user.email,
+          username: user.username,
+          at: new Date().toISOString(),
+        });
+
+        // 成功ページにリダイレクト
+        res.redirect(`${process.env.FRONTEND_URL}/auth/success?token=${token}`);
+      } catch (err) {
+        if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
+          console.error('Apple token verification error:', err);
+          return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=token_verification_failed`);
+        }
+        throw err;
+      }
+    } else {
+      return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=no_id_token`);
+    }
+  } catch (err) {
+    console.error('Apple callback error:', err);
+    res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=auth_failed`);
+  }
+});
 
 // ログアウト
 router.get('/logout', (req, res) => {
