@@ -41,6 +41,25 @@ router.post("/", authenticate, async (req, res) => {
           postId: savedPost._id
         });
       });
+
+      const followerIds = user.followers
+        .map((followerId) => followerId.toString())
+        .filter((followerId) => followerId !== req.user._id.toString());
+
+      await Promise.allSettled(
+        followerIds.map((followerId) =>
+          sendPushToUser({
+            receiverId: followerId,
+            title: '新しい投稿',
+            body: `${user.username} さんが新しい投稿をしました`,
+            data: {
+              type: 'new_post',
+              postId: savedPost._id,
+              senderId: req.user._id,
+            },
+          })
+        )
+      );
     }
 
     return res.status(200).json(populatedPost);

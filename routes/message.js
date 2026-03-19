@@ -1,7 +1,9 @@
 const router = require("express").Router();
 const Message = require("../models/Message");
 const Conversation = require("../models/Conversation");
+const User = require("../models/User");
 const { authenticate } = require("../middleware/auth");
+const { sendPushToUser } = require("../utils/pushNotification");
 
 // メッセージ追加
 router.post("/", authenticate, async (req, res) => {
@@ -62,6 +64,37 @@ router.post("/", authenticate, async (req, res) => {
     });
 
     await conversation.save();
+
+    // 送信者以外の会話メンバーへプッシュ通知
+    try {
+      const senderUser = await User.findById(sender).select("username");
+      const senderName = senderUser?.username || "ユーザー";
+      const messagePreview = (text || "").trim();
+      const body = messagePreview
+        ? `${senderName}: ${messagePreview.slice(0, 80)}`
+        : `${senderName}さんからメッセージが届きました`;
+
+      const receiverIds = conversation.members
+        .map((memberId) => memberId.toString())
+        .filter((memberId) => memberId !== sender.toString());
+
+      await Promise.allSettled(
+        receiverIds.map((memberId) =>
+          sendPushToUser({
+            receiverId: memberId,
+            title: "新着メッセージ",
+            body,
+            data: {
+              type: "message",
+              conversationId: conversation._id,
+              senderId: sender,
+            },
+          })
+        )
+      );
+    } catch (pushErr) {
+      console.error("FCM notify error (message):", pushErr);
+    }
 
     res.status(201).json(populatedMessage);
   } catch (err) {
