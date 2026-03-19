@@ -281,6 +281,16 @@ router.put('/me/push-token', authenticate, async (req, res) => {
   }
 
   try {
+    await User.updateMany(
+      {
+        _id: { $ne: req.user._id },
+        fcmToken: token,
+      },
+      {
+        $set: { fcmToken: null },
+      }
+    );
+
     await User.findByIdAndUpdate(req.user._id, {
       $set: { fcmToken: token },
     });
