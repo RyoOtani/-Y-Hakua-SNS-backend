@@ -1,5 +1,26 @@
 const User = require('../models/User');
+const Notification = require('../models/Notification');
+const Conversation = require('../models/Conversation');
 const { getFirebaseAdmin } = require('./firebaseAdmin');
+
+const getUnreadBadgeCount = async (receiverId) => {
+  const [unreadNotifications, conversations] = await Promise.all([
+    Notification.countDocuments({ receiver: receiverId, isRead: false }),
+    Conversation.find({ members: receiverId }).select('unreadCount').lean(),
+  ]);
+
+  const userId = String(receiverId);
+  const unreadMessages = conversations.reduce((total, conv) => {
+    const map = conv?.unreadCount;
+    if (!map) return total;
+
+    // Mongoose Map can appear as plain object in lean() results.
+    const count = typeof map.get === 'function' ? map.get(userId) : map[userId];
+    return total + (Number(count) || 0);
+  }, 0);
+
+  return unreadNotifications + unreadMessages;
+};
 
 const sendPushToUser = async ({
   receiverId,
@@ -32,6 +53,8 @@ const sendPushToUser = async ({
       return acc;
     }, {});
 
+    const badgeCount = await getUnreadBadgeCount(receiverId);
+
     const messageId = await firebaseAdmin.messaging().send({
       token,
       notification: {
@@ -55,14 +78,14 @@ const sendPushToUser = async ({
         payload: {
           aps: {
             sound: 'default',
-            badge: 1,
+            badge: badgeCount,
           },
         },
       },
     });
 
     console.log(
-      `[FCM] Sent push messageId=${messageId} receiver=${receiverId} elapsedMs=${Date.now() - startedAt}`
+      `[FCM] Sent push messageId=${messageId} receiver=${receiverId} badge=${badgeCount} elapsedMs=${Date.now() - startedAt}`
     );
   } catch (err) {
     const code = err?.errorInfo?.code || err?.code;
