@@ -87,6 +87,11 @@ const getServiceAccountFromFile = () => {
   return null;
 };
 
+const allowFileCredentials = () => {
+  if (process.env.FIREBASE_ALLOW_FILE_CREDENTIALS === 'true') return true;
+  return process.env.NODE_ENV !== 'production';
+};
+
 const hasFirebaseEnv = () => {
   return Boolean(
     process.env.FIREBASE_PROJECT_ID &&
@@ -101,7 +106,15 @@ const initializeFirebaseAdmin = () => {
     return admin;
   }
 
-  const serviceAccount = getServiceAccountFromEnv() || getServiceAccountFromFile();
+  const serviceAccountFromEnv = getServiceAccountFromEnv();
+  const serviceAccountFromFile = allowFileCredentials()
+    ? getServiceAccountFromFile()
+    : null;
+  const serviceAccount = serviceAccountFromEnv || serviceAccountFromFile;
+
+  if (!serviceAccountFromEnv && !allowFileCredentials()) {
+    console.warn('[FCM] File-based Firebase credentials are disabled in production. Set FIREBASE_* env vars.');
+  }
 
   if (!serviceAccount) {
     console.warn('[FCM] Firebase Admin credentials are not configured. Push delivery is disabled.');
