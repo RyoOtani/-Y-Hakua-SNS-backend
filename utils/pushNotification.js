@@ -7,22 +7,31 @@ const sendPushToUser = async ({
   body,
   data = {},
 }) => {
-  if (!receiverId) return;
+  if (!receiverId) {
+    console.warn('[FCM] Skip send: receiverId is empty');
+    return;
+  }
 
   const firebaseAdmin = getFirebaseAdmin();
-  if (!firebaseAdmin) return;
+  if (!firebaseAdmin) {
+    console.warn('[FCM] Skip send: firebase admin is not initialized');
+    return;
+  }
 
   try {
     const receiver = await User.findById(receiverId).select('fcmToken');
     const token = receiver?.fcmToken;
-    if (!token) return;
+    if (!token) {
+      console.warn(`[FCM] Skip send: no token for receiver ${receiverId}`);
+      return;
+    }
 
     const dataPayload = Object.entries(data).reduce((acc, [key, value]) => {
       acc[key] = value == null ? '' : String(value);
       return acc;
     }, {});
 
-    await firebaseAdmin.messaging().send({
+    const messageId = await firebaseAdmin.messaging().send({
       token,
       notification: {
         title,
@@ -42,6 +51,8 @@ const sendPushToUser = async ({
         },
       },
     });
+
+    console.log(`[FCM] Sent push messageId=${messageId} receiver=${receiverId}`);
   } catch (err) {
     const code = err?.errorInfo?.code || err?.code;
 
