@@ -1,5 +1,6 @@
 const router = require("express").Router();
 const User = require("../models/User");
+const mongoose = require("mongoose");
 const passport = require("passport");
 const redisClient = require("../redisClient");
 const { authenticate } = require("../middleware/auth");
@@ -103,6 +104,11 @@ router.put("/:id/settings", passport.authenticate('jwt', { session: false }), as
 router.get("/", async (req, res) => {
   const userId = req.query.userId;
   const username = req.query.username;
+
+  if (userId && !mongoose.Types.ObjectId.isValid(String(userId))) {
+    return res.status(400).json({ error: "無効な userId です" });
+  }
+
   try {
     const user = userId
       ? await User.findById(userId)
