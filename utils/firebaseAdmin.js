@@ -111,6 +111,7 @@ const initializeFirebaseAdmin = () => {
     ? getServiceAccountFromFile()
     : null;
   const serviceAccount = serviceAccountFromEnv || serviceAccountFromFile;
+  const credentialSource = serviceAccountFromEnv ? 'env' : (serviceAccountFromFile ? 'file' : 'none');
 
   if (!serviceAccountFromEnv && !allowFileCredentials()) {
     console.warn('[FCM] File-based Firebase credentials are disabled in production. Set FIREBASE_* env vars.');
@@ -121,9 +122,15 @@ const initializeFirebaseAdmin = () => {
     return null;
   }
 
+  console.log(
+    `[FCM] Initializing Firebase Admin (source=${credentialSource}, project=${serviceAccount.projectId}, client=${serviceAccount.clientEmail})`
+  );
+
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
   });
+
+  console.log('[FCM] Firebase Admin initialized successfully.');
 
   initialized = true;
   return admin;

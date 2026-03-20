@@ -30,6 +30,10 @@ const sendPushToUser = async ({
       },
       data: dataPayload,
       apns: {
+        headers: {
+          'apns-push-type': 'alert',
+          'apns-priority': '10',
+        },
         payload: {
           aps: {
             sound: 'default',
