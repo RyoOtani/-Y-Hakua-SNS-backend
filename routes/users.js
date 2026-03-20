@@ -308,6 +308,26 @@ router.put('/me/push-token', authenticate, async (req, res) => {
   }
 });
 
+// Firebase Cloud Messaging トークン状態確認（デバッグ用）
+router.get('/me/push-token', authenticate, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('fcmToken');
+    const token = user?.fcmToken || '';
+    const masked = token.length > 12
+      ? `${token.slice(0, 6)}...${token.slice(-6)}`
+      : token;
+
+    return res.status(200).json({
+      hasToken: Boolean(token),
+      tokenLength: token.length,
+      tokenMasked: masked,
+    });
+  } catch (err) {
+    console.error('Push token status error:', err);
+    return res.status(500).json({ error: 'FCMトークン状態の取得に失敗しました。' });
+  }
+});
+
 // Firebase Cloud Messaging トークン削除
 router.delete('/me/push-token', authenticate, async (req, res) => {
   try {
