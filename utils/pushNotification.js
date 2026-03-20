@@ -19,6 +19,7 @@ const sendPushToUser = async ({
   }
 
   try {
+    const startedAt = Date.now();
     const receiver = await User.findById(receiverId).select('fcmToken');
     const token = receiver?.fcmToken;
     if (!token) {
@@ -38,10 +39,18 @@ const sendPushToUser = async ({
         body,
       },
       data: dataPayload,
+      android: {
+        priority: 'high',
+        ttl: 60 * 1000,
+        notification: {
+          sound: 'default',
+        },
+      },
       apns: {
         headers: {
           'apns-push-type': 'alert',
           'apns-priority': '10',
+          'apns-expiration': '0',
         },
         payload: {
           aps: {
@@ -52,7 +61,9 @@ const sendPushToUser = async ({
       },
     });
 
-    console.log(`[FCM] Sent push messageId=${messageId} receiver=${receiverId}`);
+    console.log(
+      `[FCM] Sent push messageId=${messageId} receiver=${receiverId} elapsedMs=${Date.now() - startedAt}`
+    );
   } catch (err) {
     const code = err?.errorInfo?.code || err?.code;
 
