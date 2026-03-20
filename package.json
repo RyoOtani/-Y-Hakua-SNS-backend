@@ -6,6 +6,9 @@
   "author": "Otani",
   "type": "commonjs",
   "main": "server.js",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "start": "node server.js"
   },
@@ -22,6 +25,7 @@
     "firebase-admin": "^13.6.1",
     "googleapis": "^166.0.0",
     "helmet": "^8.1.0",
+    "iconv-lite": "0.7.2",
     "jsonwebtoken": "^9.0.3",
     "jwks-rsa": "^3.2.1",
     "mongodb": "^6.18.0",
