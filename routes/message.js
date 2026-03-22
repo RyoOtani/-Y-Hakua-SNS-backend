@@ -8,7 +8,7 @@ const { sendPushToUser } = require("../utils/pushNotification");
 // メッセージ追加
 router.post("/", authenticate, async (req, res) => {
   try {
-    let { conversationId, receiverId, text, attachments } = req.body;
+    let { conversationId, receiverId, text, attachments, replyTo } = req.body;
     const sender = req.user._id;
     let conversation;
 
@@ -38,10 +38,21 @@ router.post("/", authenticate, async (req, res) => {
       return res.status(400).json({ error: "conversationId または receiverId が必要です" });
     }
 
+    const normalizedReplyTo =
+      replyTo && replyTo.messageId
+        ? {
+            messageId: replyTo.messageId,
+            text: typeof replyTo.text === "string" ? replyTo.text.slice(0, 200) : "",
+            senderId: replyTo.senderId || null,
+            senderName: typeof replyTo.senderName === "string" ? replyTo.senderName.slice(0, 50) : "",
+          }
+        : null;
+
     const newMessage = new Message({
       conversationId,
       sender,
       text,
+      replyTo: normalizedReplyTo,
       attachments: attachments || [],
     });
 
@@ -245,7 +256,8 @@ router.put("/read-all/:conversationId", authenticate, async (req, res) => {
     }
 
     // 送信者以外が既読にする
-    await Message.updateMany(
+    const readAt = new Date();
+    const readResult = await Message.updateMany(
       {
         conversationId,
         sender: { $ne: req.user._id },
@@ -255,7 +267,7 @@ router.put("/read-all/:conversationId", authenticate, async (req, res) => {
       {
         $set: {
           read: true,
-          readAt: new Date(),
+          readAt,
         },
       }
     );
@@ -263,6 +275,23 @@ router.put("/read-all/:conversationId", authenticate, async (req, res) => {
     // 会話の未読カウントをリセット
     conversation.unreadCount.set(userId, 0);
     await conversation.save();
+
+    // 既読更新があった場合は、相手側にリアルタイム通知する
+    if ((readResult.modifiedCount || 0) > 0) {
+      const io = req.app.get("io");
+      if (io) {
+        conversation.members
+          .map((memberId) => memberId.toString())
+          .filter((memberId) => memberId !== userId)
+          .forEach((memberId) => {
+            io.to(memberId).emit("messageRead", {
+              conversationId,
+              readerId: userId,
+              readAt,
+            });
+          });
+      }
+    }
 
     res.status(200).json({ message: "すべてのメッセージを既読にしました" });
   } catch (err) {

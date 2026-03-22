@@ -8,14 +8,27 @@ const { authenticate } = require('../middleware/auth');
 // Redis client (falls back to mock when env vars are missing)
 const redis = redisClient;
 
-// Redisキーの生成ヘルパー
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+const getJstNow = () => new Date(Date.now() + JST_OFFSET_MS);
+
+const getWeekStartJst = (jstDate = getJstNow()) => {
+    const weekStart = new Date(jstDate);
+    const day = weekStart.getUTCDay(); // JST時刻をUTCメソッドで扱う
+    const diffToMonday = day === 0 ? -6 : 1 - day;
+    weekStart.setUTCDate(weekStart.getUTCDate() + diffToMonday);
+    weekStart.setUTCHours(0, 0, 0, 0);
+    return weekStart;
+};
+
+const toUtcFromJstDate = (jstDate) => new Date(jstDate.getTime() - JST_OFFSET_MS);
+
 const getWeeklyRankingKey = () => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const start = new Date(year, 0, 1);
-    const days = Math.floor((now - start) / (24 * 60 * 60 * 1000));
-    const week = Math.ceil((days + 1) / 7);
-    return `learning:ranking:weekly:${year}:${week}`;
+    const weekStartJst = getWeekStartJst();
+    const y = weekStartJst.getUTCFullYear();
+    const m = String(weekStartJst.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(weekStartJst.getUTCDate()).padStart(2, '0');
+    return `learning:ranking:weekly:${y}-${m}-${d}`;
 };
 
 // =====================================
@@ -60,6 +73,7 @@ router.post('/sessions/start', authenticate, async (req, res) => {
 router.post('/sessions/stop', authenticate, async (req, res) => {
     try {
         const userId = req.user._id;
+        const elapsedSeconds = Number(req.body?.elapsedSeconds || 0);
 
         const session = await LearningSession.findOne({
             userId,
@@ -71,7 +85,9 @@ router.post('/sessions/stop', authenticate, async (req, res) => {
         }
 
         const endTime = new Date();
-        const duration = Math.round((endTime - session.startTime) / 1000 / 60);
+        const serverDuration = Math.round((endTime - session.startTime) / 1000 / 60);
+        const clientDuration = elapsedSeconds > 0 ? Math.round(elapsedSeconds / 60) : 0;
+        const duration = Math.max(serverDuration, clientDuration, 0);
 
         session.endTime = endTime;
         session.duration = duration;
@@ -91,6 +107,35 @@ router.post('/sessions/stop', authenticate, async (req, res) => {
     } catch (err) {
         console.error('Error stopping learning session:', err);
         res.status(500).json({ message: 'セッション終了に失敗しました' });
+    }
+});
+
+// 学習進捗を同期（モバイル側の定期送信用）
+router.put('/sessions/progress', authenticate, async (req, res) => {
+    try {
+        const userId = req.user._id;
+        const elapsedSeconds = Number(req.body?.elapsedSeconds || 0);
+
+        if (!Number.isFinite(elapsedSeconds) || elapsedSeconds < 0) {
+            return res.status(400).json({ message: 'elapsedSeconds は0以上の数値が必要です' });
+        }
+
+        const session = await LearningSession.findOne({
+            userId,
+            isActive: true,
+        });
+
+        if (!session) {
+            return res.status(404).json({ message: 'アクティブなセッションがありません' });
+        }
+
+        session.duration = Math.max(session.duration || 0, Math.round(elapsedSeconds / 60));
+        await session.save();
+
+        return res.status(200).json({ message: '進捗を同期しました' });
+    } catch (err) {
+        console.error('Error syncing learning progress:', err);
+        return res.status(500).json({ message: '進捗同期に失敗しました' });
     }
 });
 
@@ -211,13 +256,34 @@ router.get('/stats', authenticate, async (req, res) => {
             { $sort: { _id: 1 } },
         ]);
 
-        res.status(200).json({
+        const activeSession = await LearningSession.findOne({
+            userId,
+            isActive: true,
+        }).select('startTime duration');
+
+        let activeMinutes = 0;
+        if (activeSession) {
+            const fromStart = Math.round((Date.now() - new Date(activeSession.startTime).getTime()) / 1000 / 60);
+            activeMinutes = Math.max(fromStart, activeSession.duration || 0);
+        }
+
+        const result = {
             today: todayStats[0]?.totalMinutes || 0,
             week: weekStats[0]?.totalMinutes || 0,
             month: monthStats[0]?.totalMinutes || 0,
             total: totalStats[0]?.totalMinutes || 0,
             dailyStats,
-        });
+        };
+
+        if (activeSession && activeMinutes > 0) {
+            const activeStart = new Date(activeSession.startTime);
+            if (activeStart >= todayStart) result.today += activeMinutes;
+            if (activeStart >= weekStart) result.week += activeMinutes;
+            if (activeStart >= monthStart) result.month += activeMinutes;
+            result.total += activeMinutes;
+        }
+
+        res.status(200).json(result);
     } catch (err) {
         console.error('Error fetching stats:', err);
         res.status(500).json({ message: '統計データ取得に失敗しました' });
@@ -385,26 +451,23 @@ router.get('/ranking/weekly', async (req, res) => {
         // 1. Redisから上位10名を取得（スコア付き）
         let rankingData;
         try {
-            rankingData = await redis.zrange(rankingKey, 0, 9, {
-                rev: true,
-                withScores: true,
-            });
+            rankingData = await redis.zRevRangeWithScores(rankingKey, 0, 9);
         } catch (redisErr) {
             console.error('Redis fetch failed, falling back to MongoDB:', redisErr);
         }
 
         // Redisにデータがない、またはエラーの場合はMongoDBから集計してRedisにセット
         if (!rankingData || rankingData.length === 0) {
-            const today = new Date();
-            const weekStart = new Date(today);
-            weekStart.setDate(today.getDate() - today.getDay());
-            weekStart.setHours(0, 0, 0, 0);
+            const weekStartJst = getWeekStartJst();
+            const weekStartUtc = toUtcFromJstDate(weekStartJst);
+            const weekEndUtc = new Date(weekStartUtc.getTime() + 7 * 24 * 60 * 60 * 1000);
 
             const mongoRanking = await LearningSession.aggregate([
                 {
                     $match: {
-                        startTime: { $gte: weekStart },
+                        startTime: { $gte: weekStartUtc, $lt: weekEndUtc },
                         isActive: false,
+                        duration: { $gt: 0 },
                     },
                 },
                 {
@@ -417,46 +480,49 @@ router.get('/ranking/weekly', async (req, res) => {
                 { $limit: 10 },
             ]);
 
-            // Redisにキャッシュ（パイプラインで一括登録）
+            // Redisにキャッシュ（互換メソッドのみ使用）
             if (mongoRanking.length > 0) {
-                const pipeline = redis.pipeline();
-                mongoRanking.forEach((item) => {
-                    pipeline.zadd(rankingKey, { score: item.totalMinutes, member: item._id.toString() });
-                });
-                await pipeline.exec();
+                try {
+                    await redis.del(rankingKey);
+                    await Promise.all(
+                        mongoRanking.map((item) =>
+                            redis.zIncrBy(rankingKey, item.totalMinutes, item._id.toString())
+                        )
+                    );
+                    await redis.expire(rankingKey, 60 * 60 * 24 * 14);
+                } catch (cacheErr) {
+                    console.error('Redis weekly ranking cache seed failed:', cacheErr);
+                }
             }
 
-            // データ形式をRedisの結果に合わせる
-            // mongoRanking: [{ _id, totalMinutes }]
-            // rankingData (Redis形式): [userId, score, userId, score, ...]
-            rankingData = [];
-            mongoRanking.forEach(item => {
-                rankingData.push(item._id.toString());
-                rankingData.push(item.totalMinutes);
-            });
+            rankingData = mongoRanking.map((item) => ({
+                value: item._id.toString(),
+                score: Number(item.totalMinutes || 0),
+            }));
         }
 
-        // 2. ユーザー情報を取得して結合
-        // rankingDataは [userId1, score1, userId2, score2, ...] のフラット配列
-        const rankedUsers = [];
-        for (let i = 0; i < rankingData.length; i += 2) {
-            const userId = rankingData[i];
-            const score = parseInt(rankingData[i + 1]);
+        const userIds = rankingData
+            .map((item) => item?.value)
+            .filter(Boolean);
 
-            // ユーザー情報を取得（本来はここもキャッシュすべきだが、今回はUserデータ変更への対応簡略化のため都度取得）
-            // 必要に応じてUser情報のキャッシュ戦略も検討可能
-            const user = await User.findById(userId).select('username profilePicture');
+        const users = await User.find({ _id: { $in: userIds } })
+            .select('username profilePicture')
+            .lean();
+        const userMap = new Map(users.map((u) => [u._id.toString(), u]));
 
-            if (user) {
-                rankedUsers.push({
+        const rankedUsers = rankingData
+            .map((item, index) => {
+                const user = userMap.get(String(item.value));
+                if (!user) return null;
+                return {
                     userId: user._id,
                     username: user.username,
                     profilePicture: user.profilePicture,
-                    totalMinutes: score,
-                    rank: (i / 2) + 1,
-                });
-            }
-        }
+                    totalMinutes: Math.max(0, Math.round(Number(item.score || 0))),
+                    rank: index + 1,
+                };
+            })
+            .filter(Boolean);
 
         res.status(200).json(rankedUsers);
     } catch (err) {

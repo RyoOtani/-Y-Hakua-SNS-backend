@@ -123,6 +123,44 @@ router.get("/unread-total", authenticate, async (req, res) => {
   }
 });
 
+// 全会話の未読メッセージを既読にする（通知閲覧時の整合用）
+router.put('/unread-clear-all', authenticate, async (req, res) => {
+  try {
+    const userId = req.user._id.toString();
+    const conversations = await Conversation.find({ members: req.user._id });
+    const conversationIds = conversations.map((c) => c._id);
+
+    if (conversationIds.length > 0) {
+      await Message.updateMany(
+        {
+          conversationId: { $in: conversationIds },
+          sender: { $ne: req.user._id },
+          read: false,
+          deletedAt: null,
+        },
+        {
+          $set: {
+            read: true,
+            readAt: new Date(),
+          },
+        }
+      );
+    }
+
+    await Promise.all(
+      conversations.map(async (conv) => {
+        conv.unreadCount.set(userId, 0);
+        await conv.save();
+      })
+    );
+
+    res.status(200).json({ message: '全会話の未読をクリアしました' });
+  } catch (err) {
+    console.error('Unread clear-all error:', err);
+    res.status(500).json({ error: '未読クリアに失敗しました' });
+  }
+});
+
 // メッセージ追加（後方互換性のため維持）
 router.post("/message", authenticate, async (req, res) => {
   try {

@@ -373,19 +373,24 @@ router.get("/like-ranking", async (req, res) => {
     }
 
     // 2. Redisに無ければMongoDB(Notification)から集計してRedisへシード
+    // キー生成(getTodayDate)と同じく、JST 3:00区切りの1日分を対象にする。
+    const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
     const nowUtc = new Date();
-    const jstMillis = nowUtc.getTime() + 9 * 60 * 60 * 1000;
-    const endJst = new Date(jstMillis);
-    const startJst = new Date(endJst.getTime() - 24 * 60 * 60 * 1000);
+    const nowJst = new Date(nowUtc.getTime() + JST_OFFSET_MS);
+    const shifted = new Date(nowJst.getTime() - 3 * 60 * 60 * 1000);
+    shifted.setUTCHours(0, 0, 0, 0);
 
-    const startUtc = new Date(startJst.getTime() - 9 * 60 * 60 * 1000);
-    const endUtc = new Date(endJst.getTime() - 9 * 60 * 60 * 1000);
+    const startJstMillis = shifted.getTime() + 3 * 60 * 60 * 1000;
+    const endJstMillis = startJstMillis + 24 * 60 * 60 * 1000;
+
+    const startUtc = new Date(startJstMillis - JST_OFFSET_MS);
+    const endUtc = new Date(endJstMillis - JST_OFFSET_MS);
 
     const agg = await Notification.aggregate([
       {
         $match: {
           type: "like",
-          createdAt: { $gte: startUtc, $lte: endUtc },
+          createdAt: { $gte: startUtc, $lt: endUtc },
           post: { $ne: null },
         },
       },

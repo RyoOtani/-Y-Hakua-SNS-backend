@@ -15,6 +15,22 @@ const MessageSchema = new mongoose.Schema(
     text: {
       type: String,
     },
+    // 返信情報（元メッセージの簡易スナップショット）
+    replyTo: {
+      messageId: {
+        type: mongoose.Schema.Types.ObjectId,
+      },
+      text: {
+        type: String,
+      },
+      senderId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+      senderName: {
+        type: String,
+      },
+    },
     // 既読状態
     read: {
       type: Boolean,

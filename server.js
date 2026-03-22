@@ -65,7 +65,7 @@ io.on("connection", (socket) => {
   });
 
   // メッセージ送信
-  socket.on("sendMessage", ({ senderId, senderName, senderProfilePicture, receiverId, text, conversationId }) => {
+  socket.on("sendMessage", ({ senderId, senderName, senderProfilePicture, receiverId, text, conversationId, attachments, replyTo }) => {
     const user = getUser(receiverId);
     if (user) {
       io.to(user.socketId).emit("getMessage", {
@@ -74,6 +74,8 @@ io.on("connection", (socket) => {
         senderProfilePicture,
         text,
         conversationId,
+        attachments: attachments || [],
+        replyTo: replyTo || null,
         createdAt: new Date(),
       });
     }
