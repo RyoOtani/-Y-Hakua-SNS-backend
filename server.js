@@ -10,6 +10,7 @@ const http = require('http');
 const path = require('path');
 const { Server } = require("socket.io");
 const redisClient = require('./redisClient');
+const User = require('./models/User');
 const { initializeFirebaseAdmin } = require('./utils/firebaseAdmin');
 dotenv.config();
 
@@ -39,6 +40,12 @@ app.set('io', io);
 let users = [];
 
 const addUser = (userId, socketId) => {
+  const existingUserIndex = users.findIndex((user) => user.userId === userId);
+  if (existingUserIndex !== -1) {
+    users[existingUserIndex].socketId = socketId;
+    return;
+  }
+
   if (!users.some((user) => user.userId === userId)) {
     users.push({ userId, socketId });
   }
@@ -57,27 +64,51 @@ io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
 
   // ユーザー登録
-  socket.on("addUser", (userId) => {
+  socket.on("addUser", async (userId, options = {}) => {
     addUser(userId, socket.id);
     socket.join(userId); // ユーザーIDのルームに参加（これで io.to(userId) が使える）
     io.emit("getUsers", users);
-    console.log("User added and joined room:", userId);
+
+    const source = options && typeof options === 'object' ? options.source : undefined;
+    if (source === 'app_resume') {
+      try {
+        const resumedUser = await User.findById(userId).select('username');
+        const username = resumedUser?.username || userId;
+        console.log(`[presence] ${username} is online again (app resume)`);
+      } catch (err) {
+        console.error('Failed to resolve username for presence log:', err);
+      }
+    } else {
+      console.log("User added and joined room:", userId);
+    }
   });
 
   // メッセージ送信
-  socket.on("sendMessage", ({ senderId, senderName, senderProfilePicture, receiverId, text, conversationId, attachments, replyTo }) => {
-    const user = getUser(receiverId);
-    if (user) {
-      io.to(user.socketId).emit("getMessage", {
-        senderId,
-        senderName,
-        senderProfilePicture,
-        text,
-        conversationId,
-        attachments: attachments || [],
-        replyTo: replyTo || null,
-        createdAt: new Date(),
-      });
+  socket.on("sendMessage", async ({ senderId, senderName, senderProfilePicture, receiverId, text, conversationId, attachments, replyTo }) => {
+    try {
+      const receiverDoc = await User.findById(receiverId).select('blockedUsers');
+      const blocked = receiverDoc?.blockedUsers || [];
+      const isBlocked = blocked.map((id) => id.toString()).includes(String(senderId));
+
+      if (isBlocked) {
+        return;
+      }
+
+      const user = getUser(receiverId);
+      if (user) {
+        io.to(user.socketId).emit("getMessage", {
+          senderId,
+          senderName,
+          senderProfilePicture,
+          text,
+          conversationId,
+          attachments: attachments || [],
+          replyTo: replyTo || null,
+          createdAt: new Date(),
+        });
+      }
+    } catch (err) {
+      console.error('sendMessage socket error:', err);
     }
   });
 

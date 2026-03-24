@@ -38,6 +38,20 @@ router.post("/", authenticate, async (req, res) => {
       return res.status(400).json({ error: "conversationId または receiverId が必要です" });
     }
 
+    const receiverIds = conversation.members
+      .map((memberId) => memberId.toString())
+      .filter((memberId) => memberId !== sender.toString());
+
+    const receivers = await User.find({ _id: { $in: receiverIds } }).select('_id blockedUsers');
+    const blockedByAnyReceiver = receivers.some((receiver) => {
+      const blocked = receiver.blockedUsers || [];
+      return blocked.map((id) => id.toString()).includes(sender.toString());
+    });
+
+    if (blockedByAnyReceiver) {
+      return res.status(403).json({ error: "このユーザーにはメッセージを送信できません" });
+    }
+
     const normalizedReplyTo =
       replyTo && replyTo.messageId
         ? {
@@ -85,12 +99,16 @@ router.post("/", authenticate, async (req, res) => {
         ? `${senderName}: ${messagePreview.slice(0, 80)}`
         : `${senderName}さんからメッセージが届きました`;
 
-      const receiverIds = conversation.members
-        .map((memberId) => memberId.toString())
-        .filter((memberId) => memberId !== sender.toString());
+      const receivers = await User.find({ _id: { $in: receiverIds } }).select('_id blockedUsers');
+      const pushTargetIds = receivers
+        .filter((receiver) => {
+          const blocked = receiver.blockedUsers || [];
+          return !blocked.map((id) => id.toString()).includes(sender.toString());
+        })
+        .map((receiver) => receiver._id.toString());
 
       await Promise.allSettled(
-        receiverIds.map((memberId) =>
+        pushTargetIds.map((memberId) =>
           sendPushToUser({
             receiverId: memberId,
             title: "新着メッセージ",

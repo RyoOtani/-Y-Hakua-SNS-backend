@@ -9,7 +9,7 @@ const { authenticate } = require("../middleware/auth");
 const sanitizeUser = (user) => {
   if (!user) return null;
   const obj = user._doc || user;
-  const { password, accessToken, refreshToken, fcmToken, updatedAt, __v, ...safe } = obj;
+  const { password, accessToken, refreshToken, fcmToken, blockedUsers, updatedAt, __v, ...safe } = obj;
   return safe;
 };
 
@@ -245,6 +245,58 @@ router.put("/:id/unfollow", authenticate, async (req, res) => {
   } catch (err) {
     console.error('Unfollow error:', err);
     return res.status(500).json({ error: 'フォロー解除に失敗しました' });
+  }
+});
+
+// block a user
+router.put("/:id/block", authenticate, async (req, res) => {
+  const currentUserId = req.user._id.toString();
+  if (currentUserId === req.params.id) {
+    return res.status(400).json({ error: "自分自身をブロックすることはできません" });
+  }
+
+  try {
+    const [targetUser, currentUser] = await Promise.all([
+      User.findById(req.params.id),
+      User.findById(currentUserId),
+    ]);
+
+    if (!targetUser || !currentUser) {
+      return res.status(404).json({ error: "ユーザーが見つかりません" });
+    }
+
+    if (currentUser.blockedUsers?.map((id) => id.toString()).includes(req.params.id)) {
+      return res.status(409).json({ error: "すでにこのユーザーをブロックしています" });
+    }
+
+    await currentUser.updateOne({ $addToSet: { blockedUsers: req.params.id } });
+
+    return res.status(200).json({ message: "ユーザーをブロックしました" });
+  } catch (err) {
+    console.error('Block user error:', err);
+    return res.status(500).json({ error: 'ブロック処理に失敗しました' });
+  }
+});
+
+// unblock a user
+router.put("/:id/unblock", authenticate, async (req, res) => {
+  const currentUserId = req.user._id.toString();
+  if (currentUserId === req.params.id) {
+    return res.status(400).json({ error: "自分自身のブロック解除はできません" });
+  }
+
+  try {
+    const currentUser = await User.findById(currentUserId);
+    if (!currentUser) {
+      return res.status(404).json({ error: "ユーザーが見つかりません" });
+    }
+
+    await currentUser.updateOne({ $pull: { blockedUsers: req.params.id } });
+
+    return res.status(200).json({ message: "ユーザーのブロックを解除しました" });
+  } catch (err) {
+    console.error('Unblock user error:', err);
+    return res.status(500).json({ error: 'ブロック解除に失敗しました' });
   }
 });
 
