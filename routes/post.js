@@ -332,11 +332,25 @@ router.get('/search', async (req, res) => {
 });
 
 // いいねランキング（本日）を取得
-// ハッシュタグと同じく、日本時間3:00区切りの日付ごとにランキングを管理
+// 日本時間3:00区切りで、直近で確定した24時間（前日3:00〜本日3:00）を表示する
 router.get("/like-ranking", async (req, res) => {
   try {
-    const today = getTodayDate();
-    const key = `likeRanking:${today}`;
+    const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+    const nowUtc = new Date();
+    const nowJst = new Date(nowUtc.getTime() + JST_OFFSET_MS);
+
+    const rankingEndJst = new Date(nowJst);
+    rankingEndJst.setUTCHours(3, 0, 0, 0);
+    if (nowJst.getUTCHours() < 3) {
+      rankingEndJst.setUTCDate(rankingEndJst.getUTCDate() - 1);
+    }
+
+    const rankingStartJst = new Date(rankingEndJst.getTime() - 24 * 60 * 60 * 1000);
+
+    const keyDate = `${rankingStartJst.getUTCFullYear()}-${String(
+      rankingStartJst.getUTCMonth() + 1
+    ).padStart(2, "0")}-${String(rankingStartJst.getUTCDate()).padStart(2, "0")}`;
+    const key = `likeRanking:${keyDate}`;
 
     // 1. Redis の ZSET から取得
     try {
@@ -372,19 +386,9 @@ router.get("/like-ranking", async (req, res) => {
       console.error("Redis fetch error (like ranking):", redisErr);
     }
 
-    // 2. Redisに無ければMongoDB(Notification)から集計してRedisへシード
-    // キー生成(getTodayDate)と同じく、JST 3:00区切りの1日分を対象にする。
-    const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
-    const nowUtc = new Date();
-    const nowJst = new Date(nowUtc.getTime() + JST_OFFSET_MS);
-    const shifted = new Date(nowJst.getTime() - 3 * 60 * 60 * 1000);
-    shifted.setUTCHours(0, 0, 0, 0);
-
-    const startJstMillis = shifted.getTime() + 3 * 60 * 60 * 1000;
-    const endJstMillis = startJstMillis + 24 * 60 * 60 * 1000;
-
-    const startUtc = new Date(startJstMillis - JST_OFFSET_MS);
-    const endUtc = new Date(endJstMillis - JST_OFFSET_MS);
+    // 2. Redisに無ければMongoDB(Notification)から同じ期間で集計してRedisへシード
+    const startUtc = new Date(rankingStartJst.getTime() - JST_OFFSET_MS);
+    const endUtc = new Date(rankingEndJst.getTime() - JST_OFFSET_MS);
 
     const agg = await Notification.aggregate([
       {
