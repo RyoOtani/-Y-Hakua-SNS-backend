@@ -122,7 +122,36 @@ const createCompatibleClient = (getActiveClient) => {
     multi() {
       const active = getActiveClient();
       const nativeMulti = resolveMethod(active, ["multi"]);
-      if (nativeMulti) return nativeMulti();
+      if (nativeMulti) {
+        const nativePipeline = nativeMulti();
+        const wrappedPipeline = {
+          del: (...args) => {
+            const fn = resolveMethod(nativePipeline, ["del"]);
+            if (!fn) throw new TypeError("Redis pipeline method not available: del");
+            fn(...args);
+            return wrappedPipeline;
+          },
+          lPush: (...args) => {
+            const fn = resolveMethod(nativePipeline, ["lPush", "lpush"]);
+            if (!fn) throw new TypeError("Redis pipeline method not available: lPush/lpush");
+            fn(...args);
+            return wrappedPipeline;
+          },
+          lTrim: (...args) => {
+            const fn = resolveMethod(nativePipeline, ["lTrim", "ltrim"]);
+            if (!fn) throw new TypeError("Redis pipeline method not available: lTrim/ltrim");
+            fn(...args);
+            return wrappedPipeline;
+          },
+          exec: async () => {
+            const fn = resolveMethod(nativePipeline, ["exec"]);
+            if (!fn) throw new TypeError("Redis pipeline method not available: exec");
+            return fn();
+          },
+        };
+
+        return wrappedPipeline;
+      }
 
       // Upstash REST client does not expose node-redis style `multi`.
       const ops = [];
