@@ -98,7 +98,7 @@ router.post('/sessions/stop', authenticate, async (req, res) => {
         // Redisの週間ランキングを更新
         try {
             const rankingKey = getWeeklyRankingKey();
-            await redis.zincrby(rankingKey, duration, userId.toString());
+            await redis.zIncrBy(rankingKey, duration, userId.toString());
         } catch (redisErr) {
             console.error('Redis ranking update failed:', redisErr);
         }

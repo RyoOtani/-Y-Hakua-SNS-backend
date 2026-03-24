@@ -20,12 +20,15 @@ const createMockClient = () => ({
   lRange: async () => [],
   lPush: async () => 0,
   lTrim: async () => "OK",
+  zAdd: async () => 1,
   zIncrBy: async () => 0,
   expire: async () => 1,
   multi: () => ({
     del: () => {},
     lPush: () => {},
     lTrim: () => {},
+    zAdd: () => {},
+    expire: () => {},
     exec: async () => [],
   }),
 });
@@ -93,6 +96,7 @@ const createCompatibleClient = (getActiveClient) => {
     lPush: (...args) => call(["lPush", "lpush"], ...args),
     lTrim: (...args) => call(["lTrim", "ltrim"], ...args),
     lRange: (...args) => call(["lRange", "lrange"], ...args),
+    zAdd: (...args) => call(["zAdd", "zadd"], ...args),
     zIncrBy: (...args) => call(["zIncrBy", "zincrby"], ...args),
     sAdd: (...args) => call(["sAdd", "sadd"], ...args),
     sRem: (...args) => call(["sRem", "srem"], ...args),
@@ -143,6 +147,18 @@ const createCompatibleClient = (getActiveClient) => {
             fn(...args);
             return wrappedPipeline;
           },
+          zAdd: (...args) => {
+            const fn = resolveMethod(nativePipeline, ["zAdd", "zadd"]);
+            if (!fn) throw new TypeError("Redis pipeline method not available: zAdd/zadd");
+            fn(...args);
+            return wrappedPipeline;
+          },
+          expire: (...args) => {
+            const fn = resolveMethod(nativePipeline, ["expire"]);
+            if (!fn) throw new TypeError("Redis pipeline method not available: expire");
+            fn(...args);
+            return wrappedPipeline;
+          },
           exec: async () => {
             const fn = resolveMethod(nativePipeline, ["exec"]);
             if (!fn) throw new TypeError("Redis pipeline method not available: exec");
@@ -168,6 +184,14 @@ const createCompatibleClient = (getActiveClient) => {
           ops.push({ method: "lTrim", args });
           return pipeline;
         },
+          zAdd: (...args) => {
+            ops.push({ method: "zAdd", args });
+            return pipeline;
+          },
+          expire: (...args) => {
+            ops.push({ method: "expire", args });
+            return pipeline;
+          },
         async exec() {
           const results = [];
           for (const op of ops) {
