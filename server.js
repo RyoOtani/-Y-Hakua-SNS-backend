@@ -43,12 +43,14 @@ const addUser = (userId, socketId) => {
   const existingUserIndex = users.findIndex((user) => user.userId === userId);
   if (existingUserIndex !== -1) {
     users[existingUserIndex].socketId = socketId;
-    return;
+    return { alreadyOnline: true };
   }
 
   if (!users.some((user) => user.userId === userId)) {
     users.push({ userId, socketId });
   }
+
+  return { alreadyOnline: false };
 };
 
 const removeUser = (socketId) => {
@@ -65,21 +67,24 @@ io.on("connection", (socket) => {
 
   // ユーザー登録
   socket.on("addUser", async (userId, options = {}) => {
-    addUser(userId, socket.id);
+    const addResult = addUser(userId, socket.id);
     socket.join(userId); // ユーザーIDのルームに参加（これで io.to(userId) が使える）
     io.emit("getUsers", users);
 
     const source = options && typeof options === 'object' ? options.source : undefined;
-    if (source === 'app_resume') {
-      try {
-        const resumedUser = await User.findById(userId).select('username');
-        const username = resumedUser?.username || userId;
+    try {
+      const resolvedUser = await User.findById(userId).select('username');
+      const username = resolvedUser?.username || userId;
+
+      if (source === 'app_resume') {
         console.log(`[presence] ${username} is online again (app resume)`);
-      } catch (err) {
-        console.error('Failed to resolve username for presence log:', err);
+      } else if (addResult?.alreadyOnline) {
+        console.log(`[presence] ${username} is online (socket reconnected)`);
+      } else {
+        console.log(`[presence] ${username} is online`);
       }
-    } else {
-      console.log("User added and joined room:", userId);
+    } catch (err) {
+      console.error('Failed to resolve username for presence log:', err);
     }
   });
 
