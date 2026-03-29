@@ -7,14 +7,17 @@ const { saveHashtags, getTodayDate } = require("./hashtag");
 const redisClient = require("../redisClient");
 const { authenticate } = require("../middleware/auth");
 const { sendPushToUser } = require("../utils/pushNotification");
+const { censorText } = require("../utils/contentFilter");
 
 //create a post
 router.post("/", authenticate, async (req, res) => {
   try {
+    const filteredDesc = censorText(req.body.desc);
+
     // ホワイトリスト方式で投稿作成
     const newPost = new Post({
       userId: req.user._id,
-      desc: req.body.desc,
+      desc: filteredDesc,
       img: req.body.img,
       video: req.body.video,
     });
@@ -25,8 +28,8 @@ router.post("/", authenticate, async (req, res) => {
       .populate('userId', 'username profilePicture');
 
     // Extract and save hashtags from the post description
-    if (req.body.desc) {
-      await saveHashtags(req.body.desc);
+    if (filteredDesc) {
+      await saveHashtags(filteredDesc);
     }
 
     // 投稿者のフォロワーを取得して通知を送る
@@ -81,7 +84,9 @@ router.put("/:id", authenticate, async (req, res) => {
     const allowedFields = ['desc', 'img', 'video'];
     const updates = {};
     for (const key of allowedFields) {
-      if (req.body[key] !== undefined) updates[key] = req.body[key];
+      if (req.body[key] !== undefined) {
+        updates[key] = key === 'desc' ? censorText(req.body[key]) : req.body[key];
+      }
     }
     await post.updateOne({ $set: updates });
     res.status(200).json({ message: "投稿が更新されました" });
@@ -472,6 +477,8 @@ router.get("/:id", async (req, res) => {
 //コメントを作成する
 router.post("/:id/comment", authenticate, async (req, res) => {
   try {
+    const filteredCommentDesc = censorText(req.body.desc);
+
     if (!req.body.desc || req.body.desc.trim().length === 0) {
       return res.status(400).json({ error: 'コメント内容は必須です' });
     }
@@ -483,7 +490,7 @@ router.post("/:id/comment", authenticate, async (req, res) => {
     const newComment = new Comment({
       postId: req.params.id,
       userId: userId,
-      desc: req.body.desc,
+      desc: filteredCommentDesc,
       img: req.body.img,
     });
     const savedComment = await newComment.save();
