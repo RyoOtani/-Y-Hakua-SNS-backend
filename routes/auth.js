@@ -364,6 +364,10 @@ router.post('/apple', authLimiter, async (req, res) => {
 router.post('/apple/callback', async (req, res) => {
   try {
     const { id_token, code, user: userDataStr, state } = req.body;
+    const sessionPlatform = req.session?.oauthPlatform;
+    const cookies = req.headers.cookie || '';
+    const cookiePlatformMatch = cookies.match(/oauth_platform=([^;]+)/);
+    const oauthPlatform = sessionPlatform || (cookiePlatformMatch ? cookiePlatformMatch[1] : null);
 
     // state の検証（CSRF保護）
     if (state !== req.session.id) {
@@ -473,6 +477,29 @@ router.post('/apple/callback', async (req, res) => {
           username: user.username,
           at: new Date().toISOString(),
         });
+
+        if (oauthPlatform === 'mobile') {
+          res.clearCookie('oauth_platform');
+          const deepLink = `hakuasns://auth/success#token=${token}`;
+          return res.send(`<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>ログイン完了</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+</head>
+<body style="display:flex;flex-direction:column;justify-content:center;align-items:center;height:100vh;font-family:-apple-system,sans-serif;margin:0;background:#f0f2f5;">
+  <p style="font-size:18px;color:#333;margin-bottom:20px;">ログインが完了しました</p>
+  <a id="openApp" href="${deepLink}" style="display:inline-block;padding:16px 40px;background:#1775ee;color:white;border-radius:30px;text-decoration:none;font-size:16px;font-weight:600;">アプリを開く</a>
+  <p style="font-size:14px;color:#666;margin-top:20px;">ボタンが動作しない場合は、手動でアプリに戻ってください</p>
+  <script>
+    var iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+    iframe.src = '${deepLink}';
+    document.body.appendChild(iframe);
+    setTimeout(function() {
+      window.location.replace('${deepLink}');
+    }, 500);
+  </script>
+</body></html>`);
+        }
 
         // 成功ページにリダイレクト
         res.redirect(`${process.env.FRONTEND_URL}/auth/success?token=${token}`);
