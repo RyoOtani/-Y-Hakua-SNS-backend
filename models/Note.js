@@ -12,6 +12,11 @@ const noteSchema = new mongoose.Schema(
       required: true,
       maxlength: 60,
     },
+    visibility: {
+      type: String,
+      enum: ['followers', 'close_friends'],
+      default: 'followers',
+    },
     // 24時間後に自動削除（MongoDB TTL index）
     expiresAt: {
       type: Date,

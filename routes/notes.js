@@ -7,12 +7,24 @@ const { authenticate: authMiddleware } = require('../middleware/auth');
 // ノートを作成（既存のノートがあれば上書き）
 router.post('/', authMiddleware, async (req, res) => {
   try {
-    const { text } = req.body;
+    const { text, visibility } = req.body;
     if (!text || !text.trim()) {
       return res.status(400).json({ error: 'テキストは必須です' });
     }
     if (text.length > 60) {
       return res.status(400).json({ error: '60文字以内で入力してください' });
+    }
+
+    const normalizedVisibility = visibility === 'close_friends' ? 'close_friends' : 'followers';
+    if (!['followers', 'close_friends'].includes(normalizedVisibility)) {
+      return res.status(400).json({ error: '公開範囲が不正です' });
+    }
+
+    if (normalizedVisibility === 'close_friends') {
+      const me = await User.findById(req.user.id).select('closeFriends');
+      if (!me || !Array.isArray(me.closeFriends) || me.closeFriends.length === 0) {
+        return res.status(400).json({ error: '親友リストが空です。先に親友を追加してください' });
+      }
     }
 
     // 既存のノートを削除して新しいノートを作成（1ユーザー1ノート）
@@ -21,6 +33,7 @@ router.post('/', authMiddleware, async (req, res) => {
     const note = new Note({
       userId: req.user.id,
       text: text.trim(),
+      visibility: normalizedVisibility,
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
     });
 
@@ -51,9 +64,29 @@ router.get('/timeline', authMiddleware, async (req, res) => {
       .populate('userId', 'username profilePicture')
       .sort({ createdAt: -1 });
 
+    const closeFriendOwnerIds = await User.find({
+      _id: { $in: userIds },
+      closeFriends: currentUser._id,
+    }).select('_id');
+    const allowedCloseFriendOwnerSet = new Set(
+      closeFriendOwnerIds.map((owner) => owner._id.toString())
+    );
+
+    const visibleNotes = notes.filter((note) => {
+      const ownerId = note.userId?._id?.toString?.();
+      if (!ownerId) return false;
+      if (ownerId === req.user.id) return true;
+
+      const noteVisibility = note.visibility || 'followers';
+      if (noteVisibility === 'close_friends') {
+        return allowedCloseFriendOwnerSet.has(ownerId);
+      }
+      return true;
+    });
+
     // 自分のノートを先頭に
-    const myNotes = notes.filter(n => n.userId._id.toString() === req.user.id);
-    const otherNotes = notes.filter(n => n.userId._id.toString() !== req.user.id);
+    const myNotes = visibleNotes.filter(n => n.userId._id.toString() === req.user.id);
+    const otherNotes = visibleNotes.filter(n => n.userId._id.toString() !== req.user.id);
 
     res.json([...myNotes, ...otherNotes]);
   } catch (err) {

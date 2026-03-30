@@ -9,6 +9,15 @@ const ConversationSchema = new mongoose.Schema(
         required: true,
       },
     ],
+    isGroup: {
+      type: Boolean,
+      default: false,
+    },
+    groupName: {
+      type: String,
+      trim: true,
+      maxlength: 60,
+    },
     // 最新メッセージの参照
     lastMessage: {
       type: mongoose.Schema.Types.ObjectId,

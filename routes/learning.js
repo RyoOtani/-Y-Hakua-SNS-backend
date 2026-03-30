@@ -12,23 +12,20 @@ const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 const getJstNow = () => new Date(Date.now() + JST_OFFSET_MS);
 
-const getWeekStartJst = (jstDate = getJstNow()) => {
-    const weekStart = new Date(jstDate);
-    const day = weekStart.getUTCDay(); // JST時刻をUTCメソッドで扱う
-    const diffToMonday = day === 0 ? -6 : 1 - day;
-    weekStart.setUTCDate(weekStart.getUTCDate() + diffToMonday);
-    weekStart.setUTCHours(0, 0, 0, 0);
-    return weekStart;
+const getDayStartJst = (jstDate = getJstNow()) => {
+    const dayStart = new Date(jstDate);
+    dayStart.setUTCHours(0, 0, 0, 0);
+    return dayStart;
 };
 
 const toUtcFromJstDate = (jstDate) => new Date(jstDate.getTime() - JST_OFFSET_MS);
 
-const getWeeklyRankingKey = () => {
-    const weekStartJst = getWeekStartJst();
-    const y = weekStartJst.getUTCFullYear();
-    const m = String(weekStartJst.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(weekStartJst.getUTCDate()).padStart(2, '0');
-    return `learning:ranking:weekly:${y}-${m}-${d}`;
+const getDailyRankingKey = () => {
+    const dayStartJst = getDayStartJst();
+    const y = dayStartJst.getUTCFullYear();
+    const m = String(dayStartJst.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(dayStartJst.getUTCDate()).padStart(2, '0');
+    return `learning:ranking:daily:${y}-${m}-${d}`;
 };
 
 // =====================================
@@ -95,9 +92,9 @@ router.post('/sessions/stop', authenticate, async (req, res) => {
 
         const updatedSession = await session.save();
 
-        // Redisの週間ランキングを更新
+        // Redisの日次ランキングを更新
         try {
-            const rankingKey = getWeeklyRankingKey();
+            const rankingKey = getDailyRankingKey();
             await redis.zIncrBy(rankingKey, duration, userId.toString());
         } catch (redisErr) {
             console.error('Redis ranking update failed:', redisErr);
@@ -443,10 +440,10 @@ router.delete('/goals/:id', authenticate, async (req, res) => {
 // ランキング関連のエンドポイント
 // =====================================
 
-// 週間学習時間ランキングを取得
-router.get('/ranking/weekly', async (req, res) => {
+// 当日の学習時間ランキングを取得（JST 0:00〜24:00）
+const getDailyLearningRanking = async (req, res) => {
     try {
-        const rankingKey = getWeeklyRankingKey();
+        const rankingKey = getDailyRankingKey();
 
         // 1. Redisから上位10名を取得（スコア付き）
         let rankingData;
@@ -458,14 +455,14 @@ router.get('/ranking/weekly', async (req, res) => {
 
         // Redisにデータがない、またはエラーの場合はMongoDBから集計してRedisにセット
         if (!rankingData || rankingData.length === 0) {
-            const weekStartJst = getWeekStartJst();
-            const weekStartUtc = toUtcFromJstDate(weekStartJst);
-            const weekEndUtc = new Date(weekStartUtc.getTime() + 7 * 24 * 60 * 60 * 1000);
+            const dayStartJst = getDayStartJst();
+            const dayStartUtc = toUtcFromJstDate(dayStartJst);
+            const dayEndUtc = new Date(dayStartUtc.getTime() + 24 * 60 * 60 * 1000);
 
             const mongoRanking = await LearningSession.aggregate([
                 {
                     $match: {
-                        startTime: { $gte: weekStartUtc, $lt: weekEndUtc },
+                        startTime: { $gte: dayStartUtc, $lt: dayEndUtc },
                         isActive: false,
                         duration: { $gt: 0 },
                     },
@@ -489,9 +486,9 @@ router.get('/ranking/weekly', async (req, res) => {
                             redis.zIncrBy(rankingKey, item.totalMinutes, item._id.toString())
                         )
                     );
-                    await redis.expire(rankingKey, 60 * 60 * 24 * 14);
+                    await redis.expire(rankingKey, 60 * 60 * 24 * 2);
                 } catch (cacheErr) {
-                    console.error('Redis weekly ranking cache seed failed:', cacheErr);
+                    console.error('Redis daily ranking cache seed failed:', cacheErr);
                 }
             }
 
@@ -526,9 +523,12 @@ router.get('/ranking/weekly', async (req, res) => {
 
         res.status(200).json(rankedUsers);
     } catch (err) {
-        console.error('Error fetching weekly ranking:', err);
+        console.error('Error fetching daily ranking:', err);
         res.status(500).json({ message: 'ランキング取得に失敗しました' });
     }
-});
+};
+
+router.get('/ranking/daily', getDailyLearningRanking);
+router.get('/ranking/weekly', getDailyLearningRanking);
 
 module.exports = router;

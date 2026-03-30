@@ -140,6 +140,12 @@ const userSchema = new mongoose.Schema(
         ref: 'User',
       },
     ],
+    closeFriends: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
     blockedUsers: [
       {
         type: mongoose.Schema.Types.ObjectId,

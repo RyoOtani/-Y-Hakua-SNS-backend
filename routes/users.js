@@ -228,7 +228,12 @@ router.put("/:id/unfollow", authenticate, async (req, res) => {
     //フォロワーにいたらフォロー外せる
     if (user.followers.includes(currentUserId)) {
       await user.updateOne({ $pull: { followers: currentUserId } });
-      await currentUser.updateOne({ $pull: { following: req.params.id } });
+        await currentUser.updateOne({
+          $pull: {
+            following: req.params.id,
+            closeFriends: req.params.id,
+          },
+        });
 
       // Redis sync
       try {

@@ -7,24 +7,44 @@ const { authenticate } = require("../middleware/auth");
 router.post("/", authenticate, async (req, res) => {
   try {
     const senderId = req.user._id;
-    const { receiverId } = req.body;
+    const { receiverId, memberIds, groupName } = req.body;
 
-    // 既存の会話があるか確認
-    const existingConversation = await Conversation.findOne({
-      members: { $all: [senderId, receiverId] },
-    });
+    const normalizedMemberIds = Array.isArray(memberIds)
+      ? memberIds.map((id) => id?.toString()).filter(Boolean)
+      : [];
 
-    if (existingConversation) {
-      return res.status(200).json(existingConversation);
+    const membersSet = new Set([
+      senderId.toString(),
+      ...(receiverId ? [receiverId.toString()] : []),
+      ...normalizedMemberIds,
+    ]);
+    const members = Array.from(membersSet);
+
+    if (members.length < 2) {
+      return res.status(400).json({ error: "会話メンバーが不足しています" });
+    }
+
+    const isGroup = members.length > 2;
+
+    // 1対1会話は既存会話を再利用
+    if (!isGroup) {
+      const existingConversation = await Conversation.findOne({
+        members: { $all: members },
+        $expr: { $eq: [{ $size: "$members" }, 2] },
+      });
+
+      if (existingConversation) {
+        return res.status(200).json(existingConversation);
+      }
     }
 
     // 新規会話作成
+    const unreadCount = new Map(members.map((id) => [id, 0]));
     const newConversation = new Conversation({
-      members: [senderId, receiverId],
-      unreadCount: new Map([
-        [senderId.toString(), 0],
-        [receiverId, 0],
-      ]),
+      members,
+      isGroup,
+      groupName: isGroup ? (groupName || "").trim().slice(0, 60) : undefined,
+      unreadCount,
     });
 
     const savedConversation = await newConversation.save();
