@@ -1,9 +1,11 @@
 const router = require("express").Router();
 const User = require("../models/User");
+const Notification = require("../models/Notification");
 const mongoose = require("mongoose");
 const passport = require("passport");
 const redisClient = require("../redisClient");
 const { authenticate } = require("../middleware/auth");
+const { sendPushToUser } = require("../utils/pushNotification");
 
 // 機密フィールドを除外するヘルパー
 const sanitizeUser = (user) => {
@@ -179,6 +181,55 @@ router.put("/:id/follow", authenticate, async (req, res) => {
         await redisClient.sAdd(`following:${currentUserId}`, req.params.id);
       } catch (redisErr) {
         console.error("Redis sync error (follow):", redisErr);
+      }
+
+      if (user.notificationPreferences?.follow !== false) {
+        const notification = new Notification({
+          sender: currentUserId,
+          receiver: user._id,
+          type: "follow",
+        });
+        const savedNotification = await notification.save();
+
+        try {
+          const notificationData = {
+            _id: savedNotification._id,
+            sender: {
+              _id: currentUser._id,
+              username: currentUser.username,
+              profilePicture: currentUser.profilePicture,
+            },
+            receiver: user._id,
+            type: "follow",
+            createdAt: savedNotification.createdAt,
+            isRead: false,
+          };
+          await redisClient.lPush(`notifications:${user._id}`, JSON.stringify(notificationData));
+          await redisClient.lTrim(`notifications:${user._id}`, 0, 49);
+        } catch (redisErr) {
+          console.error("Redis sync error (follow notification):", redisErr);
+        }
+
+        const io = req.app.get('io');
+        if (io) {
+          io.to(user._id.toString()).emit("getNotification", {
+            senderId: currentUserId,
+            senderName: currentUser.username,
+            type: "follow",
+          });
+        }
+
+        sendPushToUser({
+          receiverId: user._id,
+          title: '新しいフォロー',
+          body: `${currentUser.username} さんがあなたをフォローしました`,
+          data: {
+            type: 'follow',
+            senderId: currentUserId,
+          },
+        }).catch((pushErr) => {
+          console.error('FCM notify error (follow):', pushErr);
+        });
       }
 
       res.status(200).json({ message: "ユーザーをフォローしました" });

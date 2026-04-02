@@ -8,6 +8,7 @@ const passport = require('passport');
 const session = require('express-session');
 const http = require('http');
 const path = require('path');
+const jwt = require('jsonwebtoken');
 const { Server } = require("socket.io");
 const redisClient = require('./redisClient');
 const User = require('./models/User');
@@ -31,6 +32,52 @@ const io = new Server(server, {
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true,
   },
+});
+
+const SOCKET_JWT_SECRET = process.env.JWT_SECRET;
+if (!SOCKET_JWT_SECRET) {
+  throw new Error('JWT_SECRET must be set for socket authentication');
+}
+const SOCKET_JWT_ISSUER = process.env.JWT_ISSUER || 'hakua-sns';
+const SOCKET_JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'hakua-clients';
+
+const extractSocketToken = (socket) => {
+  const authToken = socket.handshake?.auth?.token;
+  if (typeof authToken === 'string' && authToken.trim()) {
+    return authToken.trim();
+  }
+
+  const authHeader = socket.handshake?.headers?.authorization;
+  if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+    return authHeader.slice('Bearer '.length).trim();
+  }
+
+  return null;
+};
+
+io.use((socket, next) => {
+  const token = extractSocketToken(socket);
+  if (!token) {
+    return next(new Error('Unauthorized: token missing'));
+  }
+
+  try {
+    const decoded = jwt.verify(token, SOCKET_JWT_SECRET, {
+      issuer: SOCKET_JWT_ISSUER,
+      audience: SOCKET_JWT_AUDIENCE,
+    });
+
+    const userId = decoded?.id ? String(decoded.id) : null;
+    if (!userId) {
+      return next(new Error('Unauthorized: invalid token payload'));
+    }
+
+    socket.data.userId = userId;
+    return next();
+  } catch (err) {
+    console.error('[socket] auth failed:', err.message);
+    return next(new Error('Unauthorized: token invalid'));
+  }
 });
 
 // App全体でioを使えるようにする
@@ -63,10 +110,17 @@ const getUser = (userId) => {
 
 // Socket.io 接続処理
 io.on("connection", (socket) => {
-  console.log("A user connected:", socket.id);
+  console.log("A user connected:", socket.id, `user=${socket.data.userId}`);
 
   // ユーザー登録
-  socket.on("addUser", async (userId, options = {}) => {
+  socket.on("addUser", async (clientUserId, options = {}) => {
+    const userId = socket.data.userId;
+    if (!userId) return;
+
+    if (clientUserId && String(clientUserId) !== String(userId)) {
+      console.warn(`[socket] addUser userId mismatch: token=${userId}, payload=${clientUserId}`);
+    }
+
     const addResult = addUser(userId, socket.id);
     socket.join(userId); // ユーザーIDのルームに参加（これで io.to(userId) が使える）
     io.emit("getUsers", users);
@@ -91,20 +145,30 @@ io.on("connection", (socket) => {
   // メッセージ送信
   socket.on("sendMessage", async ({ senderId, senderName, senderProfilePicture, receiverId, text, conversationId, attachments, replyTo }) => {
     try {
+      const authenticatedSenderId = socket.data.userId;
+      if (!authenticatedSenderId || !receiverId) {
+        return;
+      }
+
+      if (senderId && String(senderId) !== String(authenticatedSenderId)) {
+        console.warn(`[socket] sendMessage senderId mismatch: token=${authenticatedSenderId}, payload=${senderId}`);
+      }
+
       const receiverDoc = await User.findById(receiverId).select('blockedUsers');
       const blocked = receiverDoc?.blockedUsers || [];
-      const isBlocked = blocked.map((id) => id.toString()).includes(String(senderId));
+      const isBlocked = blocked.map((id) => id.toString()).includes(String(authenticatedSenderId));
 
       if (isBlocked) {
         return;
       }
 
+      const senderDoc = await User.findById(authenticatedSenderId).select('username profilePicture');
       const user = getUser(receiverId);
       if (user) {
         io.to(user.socketId).emit("getMessage", {
-          senderId,
-          senderName,
-          senderProfilePicture,
+          senderId: authenticatedSenderId,
+          senderName: senderDoc?.username || senderName,
+          senderProfilePicture: senderDoc?.profilePicture || senderProfilePicture,
           text,
           conversationId,
           attachments: attachments || [],
@@ -118,7 +182,12 @@ io.on("connection", (socket) => {
   });
 
   // メッセージ既読通知
-  socket.on("markAsRead", ({ conversationId, readerId, senderId }) => {
+  socket.on("markAsRead", ({ conversationId, senderId }) => {
+    const readerId = socket.data.userId;
+    if (!readerId || !senderId) {
+      return;
+    }
+
     const sender = getUser(senderId);
     if (sender) {
       io.to(sender.socketId).emit("messageRead", {
@@ -130,7 +199,12 @@ io.on("connection", (socket) => {
   });
 
   // タイピング中の通知
-  socket.on("typing", ({ conversationId, userId, receiverId }) => {
+  socket.on("typing", ({ conversationId, receiverId }) => {
+    const userId = socket.data.userId;
+    if (!userId || !receiverId) {
+      return;
+    }
+
     const user = getUser(receiverId);
     if (user) {
       io.to(user.socketId).emit("userTyping", {
@@ -141,7 +215,12 @@ io.on("connection", (socket) => {
   });
 
   // タイピング停止の通知
-  socket.on("stopTyping", ({ conversationId, userId, receiverId }) => {
+  socket.on("stopTyping", ({ conversationId, receiverId }) => {
+    const userId = socket.data.userId;
+    if (!userId || !receiverId) {
+      return;
+    }
+
     const user = getUser(receiverId);
     if (user) {
       io.to(user.socketId).emit("userStopTyping", {

@@ -99,11 +99,13 @@ router.post("/", authenticate, async (req, res) => {
         ? `${senderName}: ${messagePreview.slice(0, 80)}`
         : `${senderName}さんからメッセージが届きました`;
 
-      const receivers = await User.find({ _id: { $in: receiverIds } }).select('_id blockedUsers');
+      const receivers = await User.find({ _id: { $in: receiverIds } }).select('_id blockedUsers notificationPreferences');
       const pushTargetIds = receivers
         .filter((receiver) => {
           const blocked = receiver.blockedUsers || [];
-          return !blocked.map((id) => id.toString()).includes(sender.toString());
+          const isBlocked = blocked.map((id) => id.toString()).includes(sender.toString());
+          const messageNotifEnabled = receiver.notificationPreferences?.message !== false;
+          return !isBlocked && messageNotifEnabled;
         })
         .map((receiver) => receiver._id.toString());
 
@@ -294,21 +296,20 @@ router.put("/read-all/:conversationId", authenticate, async (req, res) => {
     conversation.unreadCount.set(userId, 0);
     await conversation.save();
 
-    // 既読更新があった場合は、相手側にリアルタイム通知する
-    if ((readResult.modifiedCount || 0) > 0) {
-      const io = req.app.get("io");
-      if (io) {
-        conversation.members
-          .map((memberId) => memberId.toString())
-          .filter((memberId) => memberId !== userId)
-          .forEach((memberId) => {
-            io.to(memberId).emit("messageRead", {
-              conversationId,
-              readerId: userId,
-              readAt,
-            });
+    // 既読更新の有無に関わらず、相手側へ既読同期イベントを通知する
+    const io = req.app.get("io");
+    if (io) {
+      conversation.members
+        .map((memberId) => memberId.toString())
+        .filter((memberId) => memberId !== userId)
+        .forEach((memberId) => {
+          io.to(memberId).emit("messageRead", {
+            conversationId,
+            readerId: userId,
+            readAt,
+            modifiedCount: readResult.modifiedCount || 0,
           });
-      }
+        });
     }
 
     res.status(200).json({ message: "すべてのメッセージを既読にしました" });

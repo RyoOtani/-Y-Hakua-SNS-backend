@@ -171,6 +171,28 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    notificationPreferences: {
+      like: {
+        type: Boolean,
+        default: true,
+      },
+      comment: {
+        type: Boolean,
+        default: true,
+      },
+      follow: {
+        type: Boolean,
+        default: true,
+      },
+      message: {
+        type: Boolean,
+        default: true,
+      },
+      newPost: {
+        type: Boolean,
+        default: true,
+      },
+    },
   },
   { timestamps: true }
 );

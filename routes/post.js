@@ -9,6 +9,12 @@ const { authenticate } = require("../middleware/auth");
 const { sendPushToUser } = require("../utils/pushNotification");
 const { censorText } = require("../utils/contentFilter");
 
+const isNotificationEnabled = (userDoc, key) => {
+  const prefs = userDoc?.notificationPreferences;
+  if (!prefs || typeof prefs !== "object") return true;
+  return prefs[key] !== false;
+};
+
 //create a post
 router.post("/", authenticate, async (req, res) => {
   try {
@@ -36,18 +42,22 @@ router.post("/", authenticate, async (req, res) => {
     const user = await User.findById(req.user._id);
     if (user && user.followers && user.followers.length > 0) {
       const io = req.app.get('io');
-      user.followers.forEach(followerId => {
+      const followerDocs = await User.find({ _id: { $in: user.followers } })
+        .select('_id notificationPreferences');
+
+      const followerIds = followerDocs
+        .filter((follower) => follower._id.toString() !== req.user._id.toString())
+        .filter((follower) => isNotificationEnabled(follower, 'newPost'))
+        .map((follower) => follower._id.toString());
+
+      followerIds.forEach((followerId) => {
         // フォロワーのルームにイベントを送信
-        io.to(followerId.toString()).emit("newPost", {
+        io.to(followerId).emit("newPost", {
           username: user.username,
           profilePicture: user.profilePicture,
           postId: savedPost._id
         });
       });
-
-      const followerIds = user.followers
-        .map((followerId) => followerId.toString())
-        .filter((followerId) => followerId !== req.user._id.toString());
 
       await Promise.allSettled(
         followerIds.map((followerId) =>
@@ -137,6 +147,11 @@ router.put("/:id/like", authenticate, async (req, res) => {
 
       // 通知作成 & 送信 (自分の投稿以外)
       if (post.userId.toString() !== userId) {
+        const receiverUser = await User.findById(post.userId).select('notificationPreferences');
+        if (!isNotificationEnabled(receiverUser, 'like')) {
+          return res.status(200).json({ message: "いいねしました" });
+        }
+
         const notification = new Notification({
           sender: userId,
           receiver: post.userId,
@@ -465,7 +480,8 @@ router.get("/like-ranking", async (req, res) => {
 //get a post
 router.get("/:id", async (req, res) => {
   try {
-    const post = await Post.findById(req.params.id);
+    const post = await Post.findById(req.params.id)
+      .populate('userId', 'username profilePicture');
     if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
     res.status(200).json(post);
   } catch (err) {
@@ -502,6 +518,11 @@ router.post("/:id/comment", authenticate, async (req, res) => {
 
     // 通知作成 & 送信 (自分の投稿以外)
     if (post.userId.toString() !== userId.toString()) {
+      const receiverUser = await User.findById(post.userId).select('notificationPreferences');
+      if (!isNotificationEnabled(receiverUser, 'comment')) {
+        return res.status(200).json(savedComment);
+      }
+
       const notification = new Notification({
         sender: userId,
         receiver: post.userId,

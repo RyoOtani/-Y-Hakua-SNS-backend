@@ -1,11 +1,41 @@
 const router = require("express").Router();
 const Notification = require("../models/Notification");
+const User = require("../models/User");
 const redisClient = require("../redisClient");
 const { authenticate } = require("../middleware/auth");
+
+const NOTIFICATION_TYPES = ["like", "comment", "follow", "message", "new_post"];
+const DEFAULT_NOTIFICATION_SETTINGS = {
+    like: true,
+    comment: true,
+    follow: true,
+    message: true,
+    newPost: true,
+};
+
+const parseTypes = (value) => {
+    if (typeof value !== "string") return [];
+    return value
+        .split(",")
+        .map((v) => v.trim())
+        .filter((v) => NOTIFICATION_TYPES.includes(v));
+};
+
+const normalizeNotificationSettings = (prefs = {}) => {
+    const normalized = { ...DEFAULT_NOTIFICATION_SETTINGS };
+    Object.keys(DEFAULT_NOTIFICATION_SETTINGS).forEach((key) => {
+        if (typeof prefs?.[key] === "boolean") {
+            normalized[key] = prefs[key];
+        }
+    });
+    return normalized;
+};
 
 // Get notifications for authenticated user (Redis優先読み込み)
 router.get("/", authenticate, async (req, res) => {
     const userId = req.user._id.toString();
+    const requestedTypes = parseTypes(req.query.types);
+    const hasTypeFilter = requestedTypes.length > 0;
 
     try {
         let notifications = [];
@@ -19,6 +49,11 @@ router.get("/", authenticate, async (req, res) => {
             );
             if (cached && cached.length > 0) {
                 notifications = cached.map((item) => JSON.parse(item));
+                if (hasTypeFilter) {
+                    notifications = notifications.filter((item) =>
+                        requestedTypes.includes(item?.type)
+                    );
+                }
                 return res.status(200).json(notifications);
             }
         } catch (redisErr) {
@@ -26,14 +61,19 @@ router.get("/", authenticate, async (req, res) => {
         }
 
         // 2. Redisに無ければMongoDBから取得し、Redisへシード
-        notifications = await Notification.find({ receiver: req.user._id })
+        const query = { receiver: req.user._id };
+        if (hasTypeFilter) {
+            query.type = { $in: requestedTypes };
+        }
+
+        notifications = await Notification.find(query)
             .populate("sender", "username profilePicture")
             .populate("post", "desc img")
             .sort({ createdAt: -1 })
             .limit(50);
 
         // Mongoの結果をRedisへ保存（将来の読み取りを高速化）
-        if (notifications.length > 0) {
+        if (!hasTypeFilter && notifications.length > 0) {
             try {
                 const pipeline = redisClient.multi();
                 pipeline.del(`notifications:${userId}`);
@@ -54,6 +94,48 @@ router.get("/", authenticate, async (req, res) => {
     } catch (err) {
         console.error("Notification fetch error:", err);
         res.status(500).json({ error: "通知の取得に失敗しました" });
+    }
+});
+
+// Get notification settings for authenticated user
+router.get("/settings", authenticate, async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id).select("notificationPreferences");
+        const settings = normalizeNotificationSettings(user?.notificationPreferences || {});
+        return res.status(200).json(settings);
+    } catch (err) {
+        console.error("Notification settings fetch error:", err);
+        return res.status(500).json({ error: "通知設定の取得に失敗しました" });
+    }
+});
+
+// Update notification settings for authenticated user
+router.put("/settings", authenticate, async (req, res) => {
+    try {
+        const allowedKeys = Object.keys(DEFAULT_NOTIFICATION_SETTINGS);
+        const updates = {};
+
+        allowedKeys.forEach((key) => {
+            if (typeof req.body?.[key] === "boolean") {
+                updates[`notificationPreferences.${key}`] = req.body[key];
+            }
+        });
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ error: "更新可能な通知設定がありません" });
+        }
+
+        const user = await User.findByIdAndUpdate(
+            req.user._id,
+            { $set: updates },
+            { new: true }
+        );
+
+        const settings = normalizeNotificationSettings(user?.notificationPreferences || {});
+        return res.status(200).json(settings);
+    } catch (err) {
+        console.error("Notification settings update error:", err);
+        return res.status(500).json({ error: "通知設定の更新に失敗しました" });
     }
 });
 
