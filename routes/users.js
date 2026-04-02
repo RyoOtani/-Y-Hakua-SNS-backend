@@ -529,4 +529,65 @@ router.put("/:id/agree-privacy", passport.authenticate('jwt', { session: false }
   }
 });
 
+// --- Close Friends ---
+
+// Get close friends
+router.get("/me/close-friends", authenticate, async (req, res) => {
+  try {
+    const currentUser = await User.findById(req.user._id).populate('closeFriends', 'username profilePicture');
+    if (!currentUser) return res.status(404).json({ error: "ユーザーが見つかりません" });
+    res.status(200).json(currentUser.closeFriends || []);
+  } catch (err) {
+    console.error("Fetch close friends error:", err);
+    res.status(500).json({ error: "親友リストの取得に失敗しました" });
+  }
+});
+
+// Add close friend
+router.put("/me/close-friends/:targetUserId", authenticate, async (req, res) => {
+  try {
+    const currentUserId = req.user._id.toString();
+    const targetUserId = req.params.targetUserId;
+
+    if (!mongoose.Types.ObjectId.isValid(String(targetUserId))) {
+      return res.status(400).json({ error: "無効なユーザーIDです" });
+    }
+    if (currentUserId === targetUserId) {
+      return res.status(400).json({ error: "自分自身を親友に追加できません" });
+    }
+    const targetUser = await User.findById(targetUserId);
+    if (!targetUser) return res.status(404).json({ error: "対象ユーザーが見つかりません" });
+
+    // 親友に追加
+    await User.findByIdAndUpdate(currentUserId, {
+      $addToSet: { closeFriends: targetUserId }
+    });
+
+    res.status(200).json({ message: "親友に追加しました" });
+  } catch (err) {
+    console.error("Add close friend error:", err);
+    res.status(500).json({ error: "親友の追加に失敗しました" });
+  }
+});
+
+// Remove close friend
+router.delete("/me/close-friends/:targetUserId", authenticate, async (req, res) => {
+  try {
+    const currentUserId = req.user._id.toString();
+    const targetUserId = req.params.targetUserId;
+
+    if (!mongoose.Types.ObjectId.isValid(String(targetUserId))) {
+      return res.status(400).json({ error: "無効なユーザーIDです" });
+    }
+
+    await User.findByIdAndUpdate(currentUserId, {
+      $pull: { closeFriends: targetUserId }
+    });
+    res.status(200).json({ message: "親友から削除しました" });
+  } catch (err) {
+    console.error("Remove close friend error:", err);
+    res.status(500).json({ error: "親友の削除に失敗しました" });
+  }
+});
+
 module.exports = router;
