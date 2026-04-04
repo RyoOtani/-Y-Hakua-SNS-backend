@@ -3,7 +3,7 @@ const Post = require("../models/Post");
 const User = require("../models/User");
 const Comment = require("../models/Comment");
 const Notification = require("../models/Notification");
-const { saveHashtags, getTodayDate } = require("./hashtag");
+const { saveHashtags, getTodayDate, getTodayRangeUtc } = require("./hashtag");
 const redisClient = require("../redisClient");
 const { authenticate } = require("../middleware/auth");
 const { sendPushToUser } = require("../utils/pushNotification");
@@ -136,7 +136,7 @@ router.put("/:id/like", authenticate, async (req, res) => {
     if (!post.likes.includes(userId)) {
       await post.updateOne({ $push: { likes: userId } });
 
-      // いいねランキング用（日本時間3:00区切りの日付キー）をRedisで更新
+      // いいねランキング用（日本時間0:00区切りの日付キー）をRedisで更新
       try {
         const today = getTodayDate();
         await redisClient.zIncrBy(`likeRanking:${today}`, 1, post._id.toString());
@@ -352,41 +352,37 @@ router.get('/search', async (req, res) => {
 });
 
 // いいねランキング（本日）を取得
-// 日本時間3:00区切りで、直近で確定した24時間（前日3:00〜本日3:00）を表示する
+// 日本時間 0:00〜24:00 を1日として当日分を表示
 router.get("/like-ranking", async (req, res) => {
   try {
-    const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+    const { dateKey, startUtc, endUtc } = getTodayRangeUtc();
+    const key = `likeRanking:${dateKey}`;
     const nowUtc = new Date();
-    const nowJst = new Date(nowUtc.getTime() + JST_OFFSET_MS);
-
-    const rankingEndJst = new Date(nowJst);
-    rankingEndJst.setUTCHours(3, 0, 0, 0);
-    if (nowJst.getUTCHours() < 3) {
-      rankingEndJst.setUTCDate(rankingEndJst.getUTCDate() - 1);
-    }
-
-    const rankingStartJst = new Date(rankingEndJst.getTime() - 24 * 60 * 60 * 1000);
-
-    const keyDate = `${rankingStartJst.getUTCFullYear()}-${String(
-      rankingStartJst.getUTCMonth() + 1
-    ).padStart(2, "0")}-${String(rankingStartJst.getUTCDate()).padStart(2, "0")}`;
-    const key = `likeRanking:${keyDate}`;
+    const rangeEndUtc = nowUtc < endUtc ? nowUtc : endUtc;
 
     // 1. Redis の ZSET から取得
     try {
-      const redisRanking = await redisClient.zRevRangeWithScores(key, 0, 9);
-      if (redisRanking && redisRanking.length > 0) {
+      const redisRanking = await redisClient.zRevRangeWithScores(key, 0, 49);
+      const normalizedRedisRanking = (redisRanking || [])
+        .map((item) => ({
+          postId: item?.value,
+          count: Math.max(0, Math.floor(Number(item?.score || 0))),
+        }))
+        .filter((item) => item.postId && item.count > 0)
+        .slice(0, 10);
+
+      if (normalizedRedisRanking.length > 0) {
         const posts = await Promise.all(
-          redisRanking.map(async (item) => {
-            const post = await Post.findById(item.value).populate(
+          normalizedRedisRanking.map(async (item) => {
+            const post = await Post.findById(item.postId).populate(
               "userId",
               "username profilePicture"
             );
             return post
               ? {
                   postId: post._id,
-                  rank: 0, // 後で並べ直す
-                  count: item.score,
+                  rank: 0,
+                  count: item.count,
                   currentLikeCount: Array.isArray(post.likes) ? post.likes.length : 0,
                   desc: post.desc,
                   img: post.img,
@@ -401,21 +397,20 @@ router.get("/like-ranking", async (req, res) => {
           rank: index + 1,
         }));
 
-        return res.status(200).json(filtered);
+        if (filtered.length > 0) {
+          return res.status(200).json(filtered);
+        }
       }
     } catch (redisErr) {
       console.error("Redis fetch error (like ranking):", redisErr);
     }
 
     // 2. Redisに無ければMongoDB(Notification)から同じ期間で集計してRedisへシード
-    const startUtc = new Date(rankingStartJst.getTime() - JST_OFFSET_MS);
-    const endUtc = new Date(rankingEndJst.getTime() - JST_OFFSET_MS);
-
     const agg = await Notification.aggregate([
       {
         $match: {
           type: "like",
-          createdAt: { $gte: startUtc, $lt: endUtc },
+          createdAt: { $gte: startUtc, $lt: rangeEndUtc },
           post: { $ne: null },
         },
       },

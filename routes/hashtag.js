@@ -3,23 +3,33 @@ const Hashtag = require("../models/Hashtag");
 const Post = require("../models/Post");
 const redisClient = require("../redisClient");
 
-// Helper function to get today's ranking date in YYYY-MM-DD (Japan time, reset at 3:00 AM)
-// ランキングは「日本時間3:00」を境に日付を切り替える。
-// 例: 2025-01-01 03:00 JST 〜 2025-01-02 02:59 JST までは同じ日付として扱う。
-const getTodayDate = () => {
-    const nowUtc = new Date();
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
-    // UTC → JST (+9h)
-    const jstMillis = nowUtc.getTime() + 9 * 60 * 60 * 1000;
+const toJstDate = (date = new Date()) => new Date(date.getTime() + JST_OFFSET_MS);
+const toUtcFromJstDate = (jstDate) => new Date(jstDate.getTime() - JST_OFFSET_MS);
 
-    // 3:00 を境にするために JST からさらに 3 時間引いた時間で日付を算出
-    const shifted = new Date(jstMillis - 3 * 60 * 60 * 1000);
-
-    const year = shifted.getUTCFullYear();
-    const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-    const day = String(shifted.getUTCDate()).padStart(2, "0");
-
+const formatJstDateKey = (jstDate) => {
+    const year = jstDate.getUTCFullYear();
+    const month = String(jstDate.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(jstDate.getUTCDate()).padStart(2, "0");
     return `${year}-${month}-${day}`;
+};
+
+// Helper function to get today's ranking date in YYYY-MM-DD (Japan time, reset at 0:00 AM)
+const getTodayDate = () => formatJstDateKey(toJstDate());
+
+const getTodayRangeUtc = (baseDate = new Date()) => {
+    const nowJst = toJstDate(baseDate);
+    const dayStartJst = new Date(nowJst);
+    dayStartJst.setUTCHours(0, 0, 0, 0);
+    const dayEndJst = new Date(dayStartJst.getTime() + DAY_MS);
+
+    return {
+        dateKey: formatJstDateKey(dayStartJst),
+        startUtc: toUtcFromJstDate(dayStartJst),
+        endUtc: toUtcFromJstDate(dayEndJst),
+    };
 };
 
 // Helper function to extract hashtags from text (max 10 chars each)
@@ -77,12 +87,19 @@ router.get("/trending", async (req, res) => {
                 0,
                 9
             );
-            if (redisTrending && redisTrending.length > 0) {
+            const normalizedTrending = (redisTrending || [])
+                .map((item) => ({
+                    tag: item?.value,
+                    count: Math.max(0, Math.floor(Number(item?.score || 0))),
+                }))
+                .filter((item) => item.tag && item.count > 0);
+
+            if (normalizedTrending.length > 0) {
                 return res.status(200).json(
-                    redisTrending.map((item, index) => ({
+                    normalizedTrending.map((item, index) => ({
                         rank: index + 1,
-                        tag: item.value,
-                        count: item.score,
+                        tag: item.tag,
+                        count: item.count,
                     }))
                 );
             }
@@ -95,26 +112,9 @@ router.get("/trending", async (req, res) => {
             .sort({ count: -1 })
             .limit(10);
 
-        // If no hashtags today, get from last 7 days
+        // 「本日」ランキングは当日データのみ返す
         if (trending.length === 0) {
-            const lastWeek = new Date();
-            lastWeek.setDate(lastWeek.getDate() - 7);
-            const lastWeekStr = lastWeek.toISOString().split("T")[0];
-
-            const weeklyTrending = await Hashtag.aggregate([
-                { $match: { date: { $gte: lastWeekStr } } },
-                { $group: { _id: "$tag", totalCount: { $sum: "$count" } } },
-                { $sort: { totalCount: -1 } },
-                { $limit: 10 },
-            ]);
-
-            return res.status(200).json(
-                weeklyTrending.map((item, index) => ({
-                    rank: index + 1,
-                    tag: item._id,
-                    count: item.totalCount,
-                }))
-            );
+            return res.status(200).json([]);
         }
 
         // 3. Mongo結果をクライアントに返しつつRedisにもシード
@@ -173,3 +173,4 @@ module.exports = router;
 module.exports.saveHashtags = saveHashtags;
 module.exports.extractHashtags = extractHashtags;
 module.exports.getTodayDate = getTodayDate;
+module.exports.getTodayRangeUtc = getTodayRangeUtc;
