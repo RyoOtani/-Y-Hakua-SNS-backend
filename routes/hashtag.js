@@ -2,6 +2,11 @@ const router = require("express").Router();
 const Hashtag = require("../models/Hashtag");
 const Post = require("../models/Post");
 const redisClient = require("../redisClient");
+const { optionalAuthenticate } = require("../middleware/auth");
+const {
+    buildViewerVisibilityContext,
+    buildVisibilityQueryForViewer,
+} = require("../utils/postVisibility");
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -149,12 +154,15 @@ router.get("/trending", async (req, res) => {
 });
 
 // GET /api/hashtags/search/:tag - Search posts by hashtag
-router.get("/search/:tag", async (req, res) => {
+router.get("/search/:tag", optionalAuthenticate, async (req, res) => {
     try {
         const tag = req.params.tag.toLowerCase();
+        const viewerContext = await buildViewerVisibilityContext(req.user?._id);
+        const visibilityFilter = buildVisibilityQueryForViewer(viewerContext);
 
         // Search posts containing this hashtag
         const posts = await Post.find({
+            ...visibilityFilter,
             desc: { $regex: `#${tag}`, $options: "i" },
         })
             .populate("userId", "username profilePicture")

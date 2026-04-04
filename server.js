@@ -14,6 +14,7 @@ const { Server } = require("socket.io");
 const redisClient = require('./redisClient');
 const User = require('./models/User');
 const { initializeFirebaseAdmin } = require('./utils/firebaseAdmin');
+const { startBatchedNotificationScheduler } = require('./utils/pushNotification');
 dotenv.config();
 
 const app = express();
@@ -302,6 +303,7 @@ require('./config/passport');
 
 // Firebase Admin 初期化（未設定時は自動的に無効化）
 initializeFirebaseAdmin();
+startBatchedNotificationScheduler();
 
 // プライバシーポリシーページ（認証不要の公開ページ）
 app.get('/privacy-policy', (req, res) => {

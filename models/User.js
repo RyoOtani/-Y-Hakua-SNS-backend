@@ -171,6 +171,15 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    notificationDeliveryMode: {
+      type: String,
+      enum: ['immediate', 'batched'],
+      default: 'immediate',
+    },
+    lastBatchedNotificationSentAt: {
+      type: Date,
+      default: null,
+    },
     notificationPreferences: {
       like: {
         type: Boolean,

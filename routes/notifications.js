@@ -5,6 +5,7 @@ const redisClient = require("../redisClient");
 const { authenticate } = require("../middleware/auth");
 
 const NOTIFICATION_TYPES = ["like", "comment", "repost", "follow", "message", "new_post"];
+const NOTIFICATION_DELIVERY_MODES = ["immediate", "batched"];
 const DEFAULT_NOTIFICATION_SETTINGS = {
     like: true,
     comment: true,
@@ -13,6 +14,7 @@ const DEFAULT_NOTIFICATION_SETTINGS = {
     message: true,
     newPost: true,
 };
+const DEFAULT_NOTIFICATION_DELIVERY_MODE = "immediate";
 
 const parseTypes = (value) => {
     if (typeof value !== "string") return [];
@@ -31,6 +33,18 @@ const normalizeNotificationSettings = (prefs = {}) => {
     });
     return normalized;
 };
+
+const normalizeNotificationDeliveryMode = (mode) => {
+    if (typeof mode === "string" && NOTIFICATION_DELIVERY_MODES.includes(mode)) {
+        return mode;
+    }
+    return DEFAULT_NOTIFICATION_DELIVERY_MODE;
+};
+
+const buildSettingsResponse = (userDoc) => ({
+    ...normalizeNotificationSettings(userDoc?.notificationPreferences || {}),
+    notificationDeliveryMode: normalizeNotificationDeliveryMode(userDoc?.notificationDeliveryMode),
+});
 
 // Get notifications for authenticated user (Redis優先読み込み)
 router.get("/", authenticate, async (req, res) => {
@@ -98,11 +112,46 @@ router.get("/", authenticate, async (req, res) => {
     }
 });
 
+// Get unread notification count for authenticated user
+router.get('/unread-count', authenticate, async (req, res) => {
+    const userId = req.user._id.toString();
+
+    try {
+        try {
+            const cached = await redisClient.lRange(`notifications:${userId}`, 0, 49);
+            if (cached && cached.length > 0) {
+                const unreadCount = cached.reduce((count, item) => {
+                    try {
+                        const parsed = JSON.parse(item);
+                        return parsed?.isRead === false ? count + 1 : count;
+                    } catch (err) {
+                        return count;
+                    }
+                }, 0);
+
+                return res.status(200).json({ unreadCount });
+            }
+        } catch (redisErr) {
+            console.error('Redis fetch error (notification unread count):', redisErr);
+        }
+
+        const unreadCount = await Notification.countDocuments({
+            receiver: req.user._id,
+            isRead: false,
+        });
+
+        return res.status(200).json({ unreadCount });
+    } catch (err) {
+        console.error('Notification unread-count error:', err);
+        return res.status(500).json({ error: '未読通知数の取得に失敗しました' });
+    }
+});
+
 // Get notification settings for authenticated user
 router.get("/settings", authenticate, async (req, res) => {
     try {
-        const user = await User.findById(req.user._id).select("notificationPreferences");
-        const settings = normalizeNotificationSettings(user?.notificationPreferences || {});
+        const user = await User.findById(req.user._id).select("notificationPreferences notificationDeliveryMode");
+        const settings = buildSettingsResponse(user);
         return res.status(200).json(settings);
     } catch (err) {
         console.error("Notification settings fetch error:", err);
@@ -122,6 +171,24 @@ router.put("/settings", authenticate, async (req, res) => {
             }
         });
 
+        if (req.body?.notificationDeliveryMode !== undefined) {
+            if (
+                typeof req.body.notificationDeliveryMode !== "string" ||
+                !NOTIFICATION_DELIVERY_MODES.includes(req.body.notificationDeliveryMode)
+            ) {
+                return res
+                    .status(400)
+                    .json({ error: "notificationDeliveryModeはimmediateまたはbatchedで指定してください" });
+            }
+
+            updates.notificationDeliveryMode = req.body.notificationDeliveryMode;
+            if (req.body.notificationDeliveryMode === "immediate") {
+                updates.lastBatchedNotificationSentAt = null;
+            } else {
+                updates.lastBatchedNotificationSentAt = new Date();
+            }
+        }
+
         if (Object.keys(updates).length === 0) {
             return res.status(400).json({ error: "更新可能な通知設定がありません" });
         }
@@ -132,7 +199,7 @@ router.put("/settings", authenticate, async (req, res) => {
             { new: true }
         );
 
-        const settings = normalizeNotificationSettings(user?.notificationPreferences || {});
+        const settings = buildSettingsResponse(user);
         return res.status(200).json(settings);
     } catch (err) {
         console.error("Notification settings update error:", err);

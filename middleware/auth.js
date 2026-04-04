@@ -7,4 +7,12 @@ const passport = require('passport');
  */
 const authenticate = passport.authenticate('jwt', { session: false });
 
-module.exports = { authenticate };
+const optionalAuthenticate = (req, res, next) => {
+	passport.authenticate('jwt', { session: false }, (err, user) => {
+		if (err) return next(err);
+		req.user = user || null;
+		return next();
+	})(req, res, next);
+};
+
+module.exports = { authenticate, optionalAuthenticate };

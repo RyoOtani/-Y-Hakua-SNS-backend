@@ -5,9 +5,16 @@ const Comment = require("../models/Comment");
 const Notification = require("../models/Notification");
 const { saveHashtags, getTodayDate, getTodayRangeUtc } = require("./hashtag");
 const redisClient = require("../redisClient");
-const { authenticate } = require("../middleware/auth");
+const { authenticate, optionalAuthenticate } = require("../middleware/auth");
 const { sendPushToUser } = require("../utils/pushNotification");
 const { censorText } = require("../utils/contentFilter");
+const {
+  POST_VISIBILITY,
+  normalizePostVisibility,
+  buildViewerVisibilityContext,
+  buildVisibilityQueryForViewer,
+  canViewerSeePost,
+} = require("../utils/postVisibility");
 
 const isNotificationEnabled = (userDoc, key) => {
   const prefs = userDoc?.notificationPreferences;
@@ -28,13 +35,26 @@ const normalizeImagePaths = (body) => {
   return imgs.slice(0, 2);
 };
 
+const hasCloseFriends = async (userId) => {
+  const me = await User.findById(userId).select('closeFriends');
+  return Boolean(me && Array.isArray(me.closeFriends) && me.closeFriends.length > 0);
+};
+
 //create a post
 router.post("/", authenticate, async (req, res) => {
   try {
     const filteredDesc = censorText(req.body.desc);
     const imgs = normalizeImagePaths(req.body);
+    const postVisibility = normalizePostVisibility(req.body.visibility);
     if (!String(filteredDesc || '').trim() && imgs.length === 0 && !req.body.video) {
       return res.status(400).json({ error: '本文または画像/動画のいずれかが必要です' });
+    }
+
+    if (postVisibility === POST_VISIBILITY.CLOSE_FRIENDS) {
+      const canPostToCloseFriends = await hasCloseFriends(req.user._id);
+      if (!canPostToCloseFriends) {
+        return res.status(400).json({ error: '親友リストが空です。先に親友を追加してください' });
+      }
     }
 
     // ホワイトリスト方式で投稿作成
@@ -44,6 +64,7 @@ router.post("/", authenticate, async (req, res) => {
       img: imgs[0] || req.body.img,
       imgs,
       video: req.body.video,
+      visibility: postVisibility,
     });
     const savedPost = await newPost.save();
 
@@ -58,9 +79,13 @@ router.post("/", authenticate, async (req, res) => {
 
     // 投稿者のフォロワーを取得して通知を送る
     const user = await User.findById(req.user._id);
-    if (user && user.followers && user.followers.length > 0) {
+    const notificationTargets = postVisibility === POST_VISIBILITY.CLOSE_FRIENDS
+      ? user?.closeFriends || []
+      : user?.followers || [];
+
+    if (user && notificationTargets.length > 0) {
       const io = req.app.get('io');
-      const followerDocs = await User.find({ _id: { $in: user.followers } })
+      const followerDocs = await User.find({ _id: { $in: notificationTargets } })
         .select('_id notificationPreferences');
 
       const followerIds = followerDocs
@@ -81,8 +106,10 @@ router.post("/", authenticate, async (req, res) => {
         followerIds.map((followerId) =>
           sendPushToUser({
             receiverId: followerId,
-            title: '新しい投稿',
-            body: `${user.username} さんが新しい投稿をしました`,
+            title: postVisibility === POST_VISIBILITY.CLOSE_FRIENDS ? '親友向けの新しい投稿' : '新しい投稿',
+            body: postVisibility === POST_VISIBILITY.CLOSE_FRIENDS
+              ? `${user.username} さんが親友向け投稿をしました`
+              : `${user.username} さんが新しい投稿をしました`,
             data: {
               type: 'new_post',
               postId: savedPost._id,
@@ -111,6 +138,18 @@ router.put("/:id", authenticate, async (req, res) => {
     // ホワイトリスト方式で更新
     const allowedFields = ['desc', 'img', 'imgs', 'video'];
     const updates = {};
+
+    if (req.body.visibility !== undefined) {
+      const postVisibility = normalizePostVisibility(req.body.visibility);
+      if (postVisibility === POST_VISIBILITY.CLOSE_FRIENDS) {
+        const canPostToCloseFriends = await hasCloseFriends(req.user._id);
+        if (!canPostToCloseFriends) {
+          return res.status(400).json({ error: '親友リストが空です。先に親友を追加してください' });
+        }
+      }
+      updates.visibility = postVisibility;
+    }
+
     for (const key of allowedFields) {
       if (req.body[key] !== undefined) {
         updates[key] = key === 'desc' ? censorText(req.body[key]) : req.body[key];
@@ -154,6 +193,12 @@ router.put("/:id/like", authenticate, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
     if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
+
+    const viewerContext = await buildViewerVisibilityContext(req.user._id);
+    if (!canViewerSeePost(post, viewerContext)) {
+      return res.status(403).json({ error: 'この投稿を見る権限がありません' });
+    }
+
     const userId = req.user._id.toString();
     //まだ投稿にいいねが押されていなかったら
     if (!post.likes.includes(userId)) {
@@ -256,6 +301,11 @@ router.put("/:id/repost", authenticate, async (req, res) => {
     const post = await Post.findById(req.params.id);
     if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
 
+    const viewerContext = await buildViewerVisibilityContext(req.user._id);
+    if (!canViewerSeePost(post, viewerContext)) {
+      return res.status(403).json({ error: 'この投稿を見る権限がありません' });
+    }
+
     const userId = req.user._id.toString();
     const reposts = Array.isArray(post.reposts) ? post.reposts.map((id) => id.toString()) : [];
     const hasReposted = reposts.includes(userId);
@@ -342,6 +392,11 @@ router.put('/:id/view', authenticate, async (req, res) => {
     const post = await Post.findById(req.params.id);
     if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
 
+    const viewerContext = await buildViewerVisibilityContext(req.user._id);
+    if (!canViewerSeePost(post, viewerContext)) {
+      return res.status(403).json({ error: 'この投稿を見る権限がありません' });
+    }
+
     const viewerId = req.user._id.toString();
     const viewedBy = Array.isArray(post.viewedBy) ? post.viewedBy.map((id) => id.toString()) : [];
     if (!viewedBy.includes(viewerId)) {
@@ -372,12 +427,16 @@ router.put('/:id/view', authenticate, async (req, res) => {
 // });
 
 // 全ユーザーの投稿（グローバルタイムライン）
-router.get("/timeline/all", async (req, res) => {
+router.get("/timeline/all", optionalAuthenticate, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = Math.min(parseInt(req.query.limit) || 10, 50);
     const skip = (page - 1) * limit;
+    const viewerContext = await buildViewerVisibilityContext(req.user?._id);
+    const visibilityFilter = buildVisibilityQueryForViewer(viewerContext);
+
     const allPosts = await Post.aggregate([
+      { $match: visibilityFilter },
       { $sort: { createdAt: -1 } },
       { $skip: skip },
       { $limit: limit },
@@ -400,6 +459,7 @@ router.get("/timeline/all", async (req, res) => {
           reposts: 1,
           viewCount: 1,
           comment: 1,
+          visibility: 1,
           isClassroom: 1,
           createdAt: 1,
           updatedAt: 1,
@@ -419,7 +479,7 @@ router.get("/timeline/all", async (req, res) => {
 });
 
 //get only profile timeline posts
-router.get("/profile/:username", async (req, res) => {
+router.get("/profile/:username", optionalAuthenticate, async (req, res) => {
   try {
     const user = await User.findOne({ username: req.params.username });
     if (!user) {
@@ -428,8 +488,10 @@ router.get("/profile/:username", async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = Math.min(parseInt(req.query.limit) || 10, 50);
     const skip = (page - 1) * limit;
+    const viewerContext = await buildViewerVisibilityContext(req.user?._id);
+    const visibilityFilter = buildVisibilityQueryForViewer(viewerContext);
 
-    const posts = await Post.find({ userId: user._id })
+    const posts = await Post.find({ userId: user._id, ...visibilityFilter })
       .populate("userId", "username profilePicture")
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -463,15 +525,18 @@ router.get("/profile/:username", async (req, res) => {
 //   console.log("post page");
 // });
 
-router.get('/search', async (req, res) => {
+router.get('/search', optionalAuthenticate, async (req, res) => {
   try {
     const q = req.query.q?.trim();
     if (!q) return res.status(400).json({ message: "検索ワードが必要です" });
 
     // Sanitize query for regex
     const sanitizedQuery = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const viewerContext = await buildViewerVisibilityContext(req.user?._id);
+    const visibilityFilter = buildVisibilityQueryForViewer(viewerContext);
 
     const posts = await Post.find({
+      ...visibilityFilter,
       desc: { $regex: sanitizedQuery, $options: 'i' }
     })
       .populate('userId', 'username profilePicture')
@@ -487,8 +552,9 @@ router.get('/search', async (req, res) => {
 
 // いいねランキング（本日）を取得
 // 日本時間 0:00〜24:00 を1日として当日分を表示
-router.get("/like-ranking", async (req, res) => {
+router.get("/like-ranking", optionalAuthenticate, async (req, res) => {
   try {
+    const viewerContext = await buildViewerVisibilityContext(req.user?._id);
     const { dateKey, startUtc, endUtc } = getTodayRangeUtc();
     const key = `likeRanking:${dateKey}`;
     const nowUtc = new Date();
@@ -512,6 +578,9 @@ router.get("/like-ranking", async (req, res) => {
               "userId",
               "username profilePicture"
             );
+            if (!canViewerSeePost(post, viewerContext)) {
+              return null;
+            }
             return post
               ? {
                   postId: post._id,
@@ -577,6 +646,7 @@ router.get("/like-ranking", async (req, res) => {
       .map((item, index) => {
         const post = postsMap[item._id.toString()];
         if (!post) return null;
+        if (!canViewerSeePost(post, viewerContext)) return null;
         return {
           postId: post._id,
           rank: index + 1,
@@ -657,11 +727,17 @@ router.get('/analytics/me', authenticate, async (req, res) => {
 });
 
 //get a post
-router.get("/:id", async (req, res) => {
+router.get("/:id", optionalAuthenticate, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id)
       .populate('userId', 'username profilePicture');
     if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
+
+    const viewerContext = await buildViewerVisibilityContext(req.user?._id);
+    if (!canViewerSeePost(post, viewerContext)) {
+      return res.status(404).json({ error: '投稿が見つかりません' });
+    }
+
     res.status(200).json(post);
   } catch (err) {
     console.error('Get post error:', err);
@@ -680,6 +756,17 @@ router.post("/:id/comment", authenticate, async (req, res) => {
     if (req.body.desc.length > 500) {
       return res.status(400).json({ error: 'コメントは500文字以内です' });
     }
+
+    const post = await Post.findById(req.params.id);
+    if (!post) {
+      return res.status(404).json({ error: '投稿が見つかりません' });
+    }
+
+    const viewerContext = await buildViewerVisibilityContext(req.user._id);
+    if (!canViewerSeePost(post, viewerContext)) {
+      return res.status(403).json({ error: 'この投稿を見る権限がありません' });
+    }
+
     const userId = req.user._id;
     // コメントを作成
     const newComment = new Comment({
@@ -691,7 +778,7 @@ router.post("/:id/comment", authenticate, async (req, res) => {
     const savedComment = await newComment.save();
 
     // 該当する投稿のコメント数をインクリメント
-    const post = await Post.findByIdAndUpdate(req.params.id, {
+    await Post.findByIdAndUpdate(req.params.id, {
       $inc: { comment: 1 },
     });
 
@@ -764,8 +851,18 @@ router.post("/:id/comment", authenticate, async (req, res) => {
 });
 
 //コメントを取得する
-router.get("/:id/comments", async (req, res) => {
+router.get("/:id/comments", optionalAuthenticate, async (req, res) => {
   try {
+    const post = await Post.findById(req.params.id);
+    if (!post) {
+      return res.status(404).json({ error: '投稿が見つかりません' });
+    }
+
+    const viewerContext = await buildViewerVisibilityContext(req.user?._id);
+    if (!canViewerSeePost(post, viewerContext)) {
+      return res.status(403).json({ error: 'この投稿を見る権限がありません' });
+    }
+
     const comments = await Comment.find({ postId: req.params.id })
       .populate("userId", "username profilePicture")
       .sort({ createdAt: -1 });
