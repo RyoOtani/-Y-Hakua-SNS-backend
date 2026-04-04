@@ -306,8 +306,8 @@ router.put("/:id/repost", authenticate, async (req, res) => {
 
           sendPushToUser({
             receiverId: post.userId,
-            title: '新しいリポスト',
-            body: `${sender?.username || 'ユーザー'} さんがあなたの投稿をリポストしました`,
+            title: '新しい推し',
+            body: `${sender?.username || 'ユーザー'} さんがあなたの投稿を推しました`,
             data: {
               type: 'repost',
               postId: post._id,
@@ -320,19 +320,19 @@ router.put("/:id/repost", authenticate, async (req, res) => {
       }
 
       return res.status(200).json({
-        message: 'リポストしました',
+        message: '推しました',
         reposted: true,
       });
     }
 
     await post.updateOne({ $pull: { reposts: userId } });
     return res.status(200).json({
-      message: 'リポストを取り消しました',
+      message: '推しを解除しました',
       reposted: false,
     });
   } catch (err) {
     console.error('Repost error:', err);
-    res.status(500).json({ error: 'リポスト処理に失敗しました' });
+    res.status(500).json({ error: '推す処理に失敗しました' });
   }
 });
 
