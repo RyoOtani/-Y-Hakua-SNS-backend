@@ -9,8 +9,17 @@ const { authenticate } = require('../middleware/auth');
 const redis = redisClient;
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+const JST_TIMEZONE = '+09:00';
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const getJstNow = () => new Date(Date.now() + JST_OFFSET_MS);
+
+const formatJstDateKey = (jstDate = getJstNow()) => {
+    const y = jstDate.getUTCFullYear();
+    const m = String(jstDate.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(jstDate.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+};
 
 const getDayStartJst = (jstDate = getJstNow()) => {
     const dayStart = new Date(jstDate);
@@ -18,15 +27,23 @@ const getDayStartJst = (jstDate = getJstNow()) => {
     return dayStart;
 };
 
+const getWeekStartJst = (jstDate = getJstNow()) => {
+    const weekStart = new Date(jstDate);
+    const dayOfWeek = weekStart.getUTCDay(); // 0=Sun,1=Mon,...
+    const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    weekStart.setUTCDate(weekStart.getUTCDate() - diffToMonday);
+    weekStart.setUTCHours(0, 0, 0, 0);
+    return weekStart;
+};
+
 const toUtcFromJstDate = (jstDate) => new Date(jstDate.getTime() - JST_OFFSET_MS);
 
 const getDailyRankingKey = () => {
     const dayStartJst = getDayStartJst();
-    const y = dayStartJst.getUTCFullYear();
-    const m = String(dayStartJst.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(dayStartJst.getUTCDate()).padStart(2, '0');
-    return `learning:ranking:daily:${y}-${m}-${d}`;
+    return `learning:ranking:daily:${formatJstDateKey(dayStartJst)}`;
 };
+
+const toMinuteFloor = (value) => Math.max(0, Math.floor(Number(value) || 0));
 
 // =====================================
 // 学習セッション関連のエンドポイント
@@ -82,9 +99,9 @@ router.post('/sessions/stop', authenticate, async (req, res) => {
         }
 
         const endTime = new Date();
-        const serverDuration = Math.round((endTime - session.startTime) / 1000 / 60);
-        const clientDuration = elapsedSeconds > 0 ? Math.round(elapsedSeconds / 60) : 0;
-        const duration = Math.max(serverDuration, clientDuration, 0);
+        const serverDuration = toMinuteFloor((endTime - session.startTime) / 1000 / 60);
+        const clientDuration = elapsedSeconds > 0 ? toMinuteFloor(elapsedSeconds / 60) : 0;
+        const duration = Math.max(serverDuration, clientDuration, toMinuteFloor(session.duration), 0);
 
         session.endTime = endTime;
         session.duration = duration;
@@ -126,7 +143,7 @@ router.put('/sessions/progress', authenticate, async (req, res) => {
             return res.status(404).json({ message: 'アクティブなセッションがありません' });
         }
 
-        session.duration = Math.max(session.duration || 0, Math.round(elapsedSeconds / 60));
+        session.duration = Math.max(toMinuteFloor(session.duration), toMinuteFloor(elapsedSeconds / 60));
         await session.save();
 
         return res.status(200).json({ message: '進捗を同期しました' });
@@ -182,23 +199,23 @@ router.get('/sessions', authenticate, async (req, res) => {
 router.get('/stats', authenticate, async (req, res) => {
     try {
         const userId = req.user._id;
-        const now = new Date();
+        const nowJst = getJstNow();
+        const todayStartUtc = toUtcFromJstDate(getDayStartJst(nowJst));
+        const weekStartUtc = toUtcFromJstDate(getWeekStartJst(nowJst));
 
-        const todayStart = new Date(now);
-        todayStart.setHours(0, 0, 0, 0);
+        const monthStartJst = new Date(nowJst);
+        monthStartJst.setUTCDate(1);
+        monthStartJst.setUTCHours(0, 0, 0, 0);
+        const monthStartUtc = toUtcFromJstDate(monthStartJst);
 
-        const weekStart = new Date(now);
-        weekStart.setDate(now.getDate() - now.getDay());
-        weekStart.setHours(0, 0, 0, 0);
-
-        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+        const dailyRangeStartUtc = new Date(todayStartUtc.getTime() - 6 * DAY_MS);
 
         const [todayStats, weekStats, monthStats, totalStats] = await Promise.all([
             LearningSession.aggregate([
                 {
                     $match: {
                         userId: userId,
-                        startTime: { $gte: todayStart },
+                        startTime: { $gte: todayStartUtc },
                         isActive: false,
                     },
                 },
@@ -208,7 +225,7 @@ router.get('/stats', authenticate, async (req, res) => {
                 {
                     $match: {
                         userId: userId,
-                        startTime: { $gte: weekStart },
+                        startTime: { $gte: weekStartUtc },
                         isActive: false,
                     },
                 },
@@ -218,7 +235,7 @@ router.get('/stats', authenticate, async (req, res) => {
                 {
                     $match: {
                         userId: userId,
-                        startTime: { $gte: monthStart },
+                        startTime: { $gte: monthStartUtc },
                         isActive: false,
                     },
                 },
@@ -240,13 +257,19 @@ router.get('/stats', authenticate, async (req, res) => {
             {
                 $match: {
                     userId: userId,
-                    startTime: { $gte: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) },
+                    startTime: { $gte: dailyRangeStartUtc },
                     isActive: false,
                 },
             },
             {
                 $group: {
-                    _id: { $dateToString: { format: '%Y-%m-%d', date: '$startTime' } },
+                    _id: {
+                        $dateToString: {
+                            format: '%Y-%m-%d',
+                            date: '$startTime',
+                            timezone: JST_TIMEZONE,
+                        },
+                    },
                     totalMinutes: { $sum: '$duration' },
                 },
             },
@@ -260,23 +283,23 @@ router.get('/stats', authenticate, async (req, res) => {
 
         let activeMinutes = 0;
         if (activeSession) {
-            const fromStart = Math.round((Date.now() - new Date(activeSession.startTime).getTime()) / 1000 / 60);
-            activeMinutes = Math.max(fromStart, activeSession.duration || 0);
+            const fromStart = toMinuteFloor((Date.now() - new Date(activeSession.startTime).getTime()) / 1000 / 60);
+            activeMinutes = Math.max(fromStart, toMinuteFloor(activeSession.duration));
         }
 
         const result = {
-            today: todayStats[0]?.totalMinutes || 0,
-            week: weekStats[0]?.totalMinutes || 0,
-            month: monthStats[0]?.totalMinutes || 0,
-            total: totalStats[0]?.totalMinutes || 0,
+            today: toMinuteFloor(todayStats[0]?.totalMinutes),
+            week: toMinuteFloor(weekStats[0]?.totalMinutes),
+            month: toMinuteFloor(monthStats[0]?.totalMinutes),
+            total: toMinuteFloor(totalStats[0]?.totalMinutes),
             dailyStats,
         };
 
         if (activeSession && activeMinutes > 0) {
             const activeStart = new Date(activeSession.startTime);
-            if (activeStart >= todayStart) result.today += activeMinutes;
-            if (activeStart >= weekStart) result.week += activeMinutes;
-            if (activeStart >= monthStart) result.month += activeMinutes;
+            if (activeStart >= todayStartUtc) result.today += activeMinutes;
+            if (activeStart >= weekStartUtc) result.week += activeMinutes;
+            if (activeStart >= monthStartUtc) result.month += activeMinutes;
             result.total += activeMinutes;
         }
 
@@ -306,7 +329,13 @@ router.get('/streak', authenticate, async (req, res) => {
             },
             {
                 $group: {
-                    _id: { $dateToString: { format: '%Y-%m-%d', date: '$startTime' } },
+                    _id: {
+                        $dateToString: {
+                            format: '%Y-%m-%d',
+                            date: '$startTime',
+                            timezone: JST_TIMEZONE,
+                        },
+                    },
                 },
             },
             { $sort: { _id: -1 } },
@@ -317,10 +346,9 @@ router.get('/streak', authenticate, async (req, res) => {
 
         // 現在のストリークを計算
         let currentStreak = 0;
-        const today = new Date().toISOString().split('T')[0];
-        const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000)
-            .toISOString()
-            .split('T')[0];
+        const nowJst = getJstNow();
+        const today = formatJstDateKey(nowJst);
+        const yesterday = formatJstDateKey(new Date(nowJst.getTime() - DAY_MS));
 
         if (dates.length > 0 && (dates[0] === today || dates[0] === yesterday)) {
             currentStreak = 1;
@@ -498,7 +526,14 @@ const getDailyLearningRanking = async (req, res) => {
             }));
         }
 
-        const userIds = rankingData
+        const normalizedRanking = rankingData
+            .map((item) => ({
+                value: item?.value,
+                score: Number(item?.score || 0),
+            }))
+            .filter((item) => item.value && item.score > 0);
+
+        const userIds = normalizedRanking
             .map((item) => item?.value)
             .filter(Boolean);
 
@@ -507,7 +542,7 @@ const getDailyLearningRanking = async (req, res) => {
             .lean();
         const userMap = new Map(users.map((u) => [u._id.toString(), u]));
 
-        const rankedUsers = rankingData
+        const rankedUsers = normalizedRanking
             .map((item, index) => {
                 const user = userMap.get(String(item.value));
                 if (!user) return null;
@@ -515,7 +550,7 @@ const getDailyLearningRanking = async (req, res) => {
                     userId: user._id,
                     username: user.username,
                     profilePicture: user.profilePicture,
-                    totalMinutes: Math.max(0, Math.round(Number(item.score || 0))),
+                    totalMinutes: toMinuteFloor(item.score),
                     rank: index + 1,
                 };
             })
@@ -528,7 +563,63 @@ const getDailyLearningRanking = async (req, res) => {
     }
 };
 
+// 週間学習時間ランキングを取得（JST 月曜0:00〜翌週月曜0:00）
+const getWeeklyLearningRanking = async (req, res) => {
+    try {
+        const weekStartJst = getWeekStartJst();
+        const weekStartUtc = toUtcFromJstDate(weekStartJst);
+        const weekEndUtc = new Date(weekStartUtc.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+        const mongoRanking = await LearningSession.aggregate([
+            {
+                $match: {
+                    startTime: { $gte: weekStartUtc, $lt: weekEndUtc },
+                    duration: { $gt: 0 },
+                },
+            },
+            {
+                $group: {
+                    _id: '$userId',
+                    totalMinutes: { $sum: '$duration' },
+                },
+            },
+            { $sort: { totalMinutes: -1 } },
+            { $limit: 10 },
+        ]);
+
+        const filteredRanking = mongoRanking.filter((item) => Number(item.totalMinutes || 0) > 0);
+        const userIds = filteredRanking.map((item) => item._id.toString());
+
+        const users = await User.find({ _id: { $in: userIds } })
+            .select('username profilePicture')
+            .lean();
+        const userMap = new Map(users.map((u) => [u._id.toString(), u]));
+
+        const rankedUsers = filteredRanking
+            .map((item) => {
+                const user = userMap.get(item._id.toString());
+                if (!user) return null;
+                return {
+                    userId: user._id,
+                    username: user.username,
+                    profilePicture: user.profilePicture,
+                    totalMinutes: toMinuteFloor(item.totalMinutes),
+                };
+            })
+            .filter(Boolean)
+            .map((item, index) => ({
+                ...item,
+                rank: index + 1,
+            }));
+
+        res.status(200).json(rankedUsers);
+    } catch (err) {
+        console.error('Error fetching weekly ranking:', err);
+        res.status(500).json({ message: '週間ランキング取得に失敗しました' });
+    }
+};
+
 router.get('/ranking/daily', getDailyLearningRanking);
-router.get('/ranking/weekly', getDailyLearningRanking);
+router.get('/ranking/weekly', getWeeklyLearningRanking);
 
 module.exports = router;

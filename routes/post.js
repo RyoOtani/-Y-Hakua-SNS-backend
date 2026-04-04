@@ -387,6 +387,7 @@ router.get("/like-ranking", async (req, res) => {
                   postId: post._id,
                   rank: 0, // 後で並べ直す
                   count: item.score,
+                  currentLikeCount: Array.isArray(post.likes) ? post.likes.length : 0,
                   desc: post.desc,
                   img: post.img,
                   user: post.userId,
@@ -450,6 +451,7 @@ router.get("/like-ranking", async (req, res) => {
           postId: post._id,
           rank: index + 1,
           count: item.count,
+          currentLikeCount: Array.isArray(post.likes) ? post.likes.length : 0,
           desc: post.desc,
           img: post.img,
           user: post.userId,
