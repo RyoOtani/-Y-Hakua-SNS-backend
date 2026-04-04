@@ -180,6 +180,10 @@ const userSchema = new mongoose.Schema(
         type: Boolean,
         default: true,
       },
+      repost: {
+        type: Boolean,
+        default: true,
+      },
       follow: {
         type: Boolean,
         default: true,

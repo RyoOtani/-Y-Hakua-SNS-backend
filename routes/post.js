@@ -15,16 +15,34 @@ const isNotificationEnabled = (userDoc, key) => {
   return prefs[key] !== false;
 };
 
+const normalizeImagePaths = (body) => {
+  const imgs = Array.isArray(body?.imgs)
+    ? body.imgs.filter((path) => typeof path === 'string' && path.trim())
+    : [];
+  const legacyImg = typeof body?.img === 'string' && body.img.trim() ? body.img.trim() : null;
+
+  if (legacyImg && !imgs.includes(legacyImg)) {
+    imgs.unshift(legacyImg);
+  }
+
+  return imgs.slice(0, 2);
+};
+
 //create a post
 router.post("/", authenticate, async (req, res) => {
   try {
     const filteredDesc = censorText(req.body.desc);
+    const imgs = normalizeImagePaths(req.body);
+    if (!String(filteredDesc || '').trim() && imgs.length === 0 && !req.body.video) {
+      return res.status(400).json({ error: '本文または画像/動画のいずれかが必要です' });
+    }
 
     // ホワイトリスト方式で投稿作成
     const newPost = new Post({
       userId: req.user._id,
       desc: filteredDesc,
-      img: req.body.img,
+      img: imgs[0] || req.body.img,
+      imgs,
       video: req.body.video,
     });
     const savedPost = await newPost.save();
@@ -91,12 +109,17 @@ router.put("/:id", authenticate, async (req, res) => {
       return res.status(403).json({ error: "自分の投稿のみ更新できます" });
     }
     // ホワイトリスト方式で更新
-    const allowedFields = ['desc', 'img', 'video'];
+    const allowedFields = ['desc', 'img', 'imgs', 'video'];
     const updates = {};
     for (const key of allowedFields) {
       if (req.body[key] !== undefined) {
         updates[key] = key === 'desc' ? censorText(req.body[key]) : req.body[key];
       }
+    }
+    if (req.body.img !== undefined || req.body.imgs !== undefined) {
+      const imgs = normalizeImagePaths(req.body);
+      updates.imgs = imgs;
+      updates.img = imgs[0] || null;
     }
     await post.updateOne({ $set: updates });
     res.status(200).json({ message: "投稿が更新されました" });
@@ -227,6 +250,114 @@ router.put("/:id/like", authenticate, async (req, res) => {
   }
 });
 
+// repost/unrepost a post
+router.put("/:id/repost", authenticate, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id);
+    if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
+
+    const userId = req.user._id.toString();
+    const reposts = Array.isArray(post.reposts) ? post.reposts.map((id) => id.toString()) : [];
+    const hasReposted = reposts.includes(userId);
+
+    if (!hasReposted) {
+      await post.updateOne({ $addToSet: { reposts: userId } });
+
+      if (post.userId.toString() !== userId) {
+        const receiverUser = await User.findById(post.userId).select('notificationPreferences');
+        if (isNotificationEnabled(receiverUser, 'repost')) {
+          const notification = new Notification({
+            sender: userId,
+            receiver: post.userId,
+            type: 'repost',
+            post: post._id,
+          });
+          const savedNotification = await notification.save();
+
+          try {
+            const sender = await User.findById(userId).select('username profilePicture');
+            const notificationData = {
+              _id: savedNotification._id,
+              sender: {
+                _id: sender._id,
+                username: sender.username,
+                profilePicture: sender.profilePicture,
+              },
+              receiver: post.userId,
+              type: 'repost',
+              post: post._id,
+              createdAt: savedNotification.createdAt,
+              isRead: false,
+            };
+            await redisClient.lPush(`notifications:${post.userId}`, JSON.stringify(notificationData));
+            await redisClient.lTrim(`notifications:${post.userId}`, 0, 49);
+          } catch (redisErr) {
+            console.error('Redis notification sync error (repost):', redisErr);
+          }
+
+          const io = req.app.get('io');
+          const sender = await User.findById(userId).select('username');
+          io.to(post.userId.toString()).emit('getNotification', {
+            senderId: userId,
+            senderName: sender?.username || 'ユーザー',
+            type: 'repost',
+            postId: post._id,
+          });
+
+          sendPushToUser({
+            receiverId: post.userId,
+            title: '新しいリポスト',
+            body: `${sender?.username || 'ユーザー'} さんがあなたの投稿をリポストしました`,
+            data: {
+              type: 'repost',
+              postId: post._id,
+              senderId: userId,
+            },
+          }).catch((pushErr) => {
+            console.error('FCM notify error (repost):', pushErr);
+          });
+        }
+      }
+
+      return res.status(200).json({
+        message: 'リポストしました',
+        reposted: true,
+      });
+    }
+
+    await post.updateOne({ $pull: { reposts: userId } });
+    return res.status(200).json({
+      message: 'リポストを取り消しました',
+      reposted: false,
+    });
+  } catch (err) {
+    console.error('Repost error:', err);
+    res.status(500).json({ error: 'リポスト処理に失敗しました' });
+  }
+});
+
+// track unique post views
+router.put('/:id/view', authenticate, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id);
+    if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
+
+    const viewerId = req.user._id.toString();
+    const viewedBy = Array.isArray(post.viewedBy) ? post.viewedBy.map((id) => id.toString()) : [];
+    if (!viewedBy.includes(viewerId)) {
+      await post.updateOne({
+        $addToSet: { viewedBy: viewerId },
+        $inc: { viewCount: 1 },
+      });
+    }
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error('View tracking error:', err);
+    return res.status(500).json({ error: '閲覧数の更新に失敗しました' });
+  }
+});
+
 
 
 // //get all post of the user
@@ -263,8 +394,11 @@ router.get("/timeline/all", async (req, res) => {
         $project: {
           desc: 1,
           img: 1,
+          imgs: 1,
           video: 1,
           likes: 1,
+          reposts: 1,
+          viewCount: 1,
           comment: 1,
           isClassroom: 1,
           createdAt: 1,
@@ -386,6 +520,7 @@ router.get("/like-ranking", async (req, res) => {
                   currentLikeCount: Array.isArray(post.likes) ? post.likes.length : 0,
                   desc: post.desc,
                   img: post.img,
+                      imgs: post.imgs,
                   user: post.userId,
                 }
               : null;
@@ -449,6 +584,7 @@ router.get("/like-ranking", async (req, res) => {
           currentLikeCount: Array.isArray(post.likes) ? post.likes.length : 0,
           desc: post.desc,
           img: post.img,
+          imgs: post.imgs,
           user: post.userId,
         };
       })
@@ -471,6 +607,52 @@ router.get("/like-ranking", async (req, res) => {
   } catch (err) {
     console.error("Error in /like-ranking:", err);
     return res.status(500).json({ error: 'ランキングの取得に失敗しました' });
+  }
+});
+
+// creator analytics for own posts
+router.get('/analytics/me', authenticate, async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const posts = await Post.find({ userId: req.user._id })
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .select('desc img imgs createdAt likes comment reposts viewCount');
+
+    const metrics = posts.map((post) => {
+      const likeCount = Array.isArray(post.likes) ? post.likes.length : 0;
+      const repostCount = Array.isArray(post.reposts) ? post.reposts.length : 0;
+      return {
+        postId: post._id,
+        desc: post.desc,
+        img: post.img,
+        imgs: post.imgs || [],
+        createdAt: post.createdAt,
+        likeCount,
+        commentCount: Number(post.comment || 0),
+        repostCount,
+        viewCount: Number(post.viewCount || 0),
+      };
+    });
+
+    const summary = metrics.reduce(
+      (acc, item) => {
+        acc.totalLikes += item.likeCount;
+        acc.totalComments += item.commentCount;
+        acc.totalReposts += item.repostCount;
+        acc.totalViews += item.viewCount;
+        return acc;
+      },
+      { totalLikes: 0, totalComments: 0, totalReposts: 0, totalViews: 0 }
+    );
+
+    return res.status(200).json({
+      summary,
+      posts: metrics,
+    });
+  } catch (err) {
+    console.error('Creator analytics error:', err);
+    return res.status(500).json({ error: 'クリエイター分析の取得に失敗しました' });
   }
 });
 

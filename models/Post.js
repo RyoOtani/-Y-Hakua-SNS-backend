@@ -14,10 +14,14 @@ const PostSchema = new mongoose.Schema(
     desc: {
       type: String,
       max: 500,
-      required: true,
+      default: "",
     },
     img: {
       type: String,
+    },
+    imgs: {
+      type: [String],
+      default: [],
     },
     video: {
       type: String,
@@ -26,6 +30,18 @@ const PostSchema = new mongoose.Schema(
       type: String,
     },
     likes: {
+      type: Array,
+      default: [],
+    },
+    reposts: {
+      type: Array,
+      default: [],
+    },
+    viewCount: {
+      type: Number,
+      default: 0,
+    },
+    viewedBy: {
       type: Array,
       default: [],
     },

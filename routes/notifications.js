@@ -4,10 +4,11 @@ const User = require("../models/User");
 const redisClient = require("../redisClient");
 const { authenticate } = require("../middleware/auth");
 
-const NOTIFICATION_TYPES = ["like", "comment", "follow", "message", "new_post"];
+const NOTIFICATION_TYPES = ["like", "comment", "repost", "follow", "message", "new_post"];
 const DEFAULT_NOTIFICATION_SETTINGS = {
     like: true,
     comment: true,
+    repost: true,
     follow: true,
     message: true,
     newPost: true,

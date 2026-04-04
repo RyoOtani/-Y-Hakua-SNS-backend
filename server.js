@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const compression = require('compression');
 const passport = require('passport');
 const session = require('express-session');
 const http = require('http');
@@ -240,6 +241,7 @@ io.on("connection", (socket) => {
 
 // ミドルウェア
 app.use(helmet());
+app.use(compression());
 app.use(morgan('common'));
 app.use(cors({
   origin: allowedOrigins,

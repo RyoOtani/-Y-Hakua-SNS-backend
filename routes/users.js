@@ -379,6 +379,94 @@ router.get("/search", async (req, res) => {
   }
 });
 
+// おすすめユーザー取得（人気ユーザー + 共通フォロー）
+router.get('/recommendations', authenticate, async (req, res) => {
+  try {
+    const me = await User.findById(req.user._id).select('following');
+    if (!me) {
+      return res.status(404).json({ error: 'ユーザーが見つかりません' });
+    }
+
+    const followingIds = (me.following || []).map((id) => id.toString());
+    const excludedIdStrings = new Set([req.user._id.toString(), ...followingIds]);
+    const excludedIds = Array.from(excludedIdStrings).map((id) => new mongoose.Types.ObjectId(id));
+
+    const popularUsers = await User.aggregate([
+      {
+        $match: {
+          _id: { $nin: excludedIds },
+        },
+      },
+      {
+        $addFields: {
+          followerCount: { $size: { $ifNull: ['$followers', []] } },
+        },
+      },
+      { $sort: { followerCount: -1, createdAt: -1 } },
+      { $limit: 12 },
+      {
+        $project: {
+          username: 1,
+          profilePicture: 1,
+          desc: 1,
+          followerCount: 1,
+        },
+      },
+    ]);
+
+    const followingDocs = followingIds.length > 0
+      ? await User.find({ _id: { $in: followingIds } }).select('following')
+      : [];
+
+    const commonCounter = new Map();
+    for (const doc of followingDocs) {
+      const docFollowing = doc.following || [];
+      docFollowing.forEach((candidateId) => {
+        const id = candidateId.toString();
+        if (excludedIdStrings.has(id)) return;
+        commonCounter.set(id, (commonCounter.get(id) || 0) + 1);
+      });
+    }
+
+    const mutualIds = Array.from(commonCounter.entries())
+      .filter(([, count]) => count >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([id]) => id);
+
+    const mutualUsersRaw = mutualIds.length > 0
+      ? await User.find({ _id: { $in: mutualIds } })
+          .select('username profilePicture desc followers')
+          .lean()
+      : [];
+
+    const mutualFollowedUsers = mutualUsersRaw
+      .map((u) => ({
+        _id: u._id,
+        username: u.username,
+        profilePicture: u.profilePicture,
+        desc: u.desc || '',
+        followerCount: Array.isArray(u.followers) ? u.followers.length : 0,
+        commonFollowingCount: commonCounter.get(u._id.toString()) || 0,
+      }))
+      .sort((a, b) => {
+        if (b.commonFollowingCount !== a.commonFollowingCount) {
+          return b.commonFollowingCount - a.commonFollowingCount;
+        }
+        return b.followerCount - a.followerCount;
+      })
+      .slice(0, 12);
+
+    return res.status(200).json({
+      popularUsers,
+      mutualFollowedUsers,
+    });
+  } catch (err) {
+    console.error('User recommendations error:', err);
+    return res.status(500).json({ error: 'おすすめユーザーの取得に失敗しました' });
+  }
+});
+
 // Google認証によるユーザー情報の取得
 router.get("/me", passport.authenticate('jwt', { session: false }), (req, res) => {
   // パスワードを除いてユーザー情報を返す
