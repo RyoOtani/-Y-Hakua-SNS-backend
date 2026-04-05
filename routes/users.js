@@ -6,6 +6,7 @@ const passport = require("passport");
 const redisClient = require("../redisClient");
 const { authenticate } = require("../middleware/auth");
 const { sendPushToUser } = require("../utils/pushNotification");
+const { getActiveLearningRankingBadge } = require('../utils/learningBadge');
 
 // 機密フィールドを除外するヘルパー
 const sanitizeUser = (user) => {
@@ -24,6 +25,7 @@ const sanitizeUser = (user) => {
     notificationPreferences,
     notificationDeliveryMode,
     lastBatchedNotificationSentAt,
+    learningRankingBadge,
     accountLocked,
     lockReason,
     lockedAt,
@@ -38,6 +40,7 @@ const sanitizeUser = (user) => {
     followersCount: Array.isArray(followers) ? followers.length : 0,
     followingCount: Array.isArray(following) ? following.length : 0,
     closeFriendsCount: Array.isArray(closeFriends) ? closeFriends.length : 0,
+    learningRankingBadge: getActiveLearningRankingBadge(learningRankingBadge),
   };
 };
 
@@ -502,8 +505,20 @@ router.get('/recommendations', authenticate, async (req, res) => {
 // Google認証によるユーザー情報の取得
 router.get("/me", passport.authenticate('jwt', { session: false }), (req, res) => {
   // パスワードを除いてユーザー情報を返す
-  const { password, accessToken, refreshToken, fcmToken, updatedAt, ...other } = req.user._doc;
-  res.status(200).json(other);
+  const {
+    password,
+    accessToken,
+    refreshToken,
+    fcmToken,
+    updatedAt,
+    learningRankingBadge,
+    ...other
+  } = req.user._doc;
+
+  res.status(200).json({
+    ...other,
+    learningRankingBadge: getActiveLearningRankingBadge(learningRankingBadge),
+  });
 });
 
 // Firebase Cloud Messaging トークン登録

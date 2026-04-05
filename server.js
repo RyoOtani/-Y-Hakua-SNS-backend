@@ -16,6 +16,7 @@ const User = require('./models/User');
 const Conversation = require('./models/Conversation');
 const { initializeFirebaseAdmin } = require('./utils/firebaseAdmin');
 const { startBatchedNotificationScheduler } = require('./utils/pushNotification');
+const { startWeeklyLearningBadgeScheduler } = require('./utils/learningBadge');
 const { toIdString, getConversationMemberIds } = require('./utils/socketAuthorization');
 dotenv.config();
 
@@ -431,6 +432,7 @@ require('./config/passport');
 // Firebase Admin 初期化（未設定時は自動的に無効化）
 initializeFirebaseAdmin();
 startBatchedNotificationScheduler();
+startWeeklyLearningBadgeScheduler();
 
 // プライバシーポリシーページ（認証不要の公開ページ）
 app.get('/privacy-policy', (req, res) => {

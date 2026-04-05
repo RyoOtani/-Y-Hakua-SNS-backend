@@ -206,6 +206,28 @@ const userSchema = new mongoose.Schema(
         default: true,
       },
     },
+    learningRankingBadge: {
+      rank: {
+        type: Number,
+        enum: [1, 2, 3],
+      },
+      weekStartKey: {
+        type: String,
+      },
+      sourceWeekKey: {
+        type: String,
+      },
+      totalMinutes: {
+        type: Number,
+        min: 0,
+      },
+      awardedAt: {
+        type: Date,
+      },
+      expiresAt: {
+        type: Date,
+      },
+    },
   },
   { timestamps: true }
 );

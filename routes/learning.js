@@ -4,6 +4,10 @@ const LearningGoal = require('../models/LearningGoal');
 const User = require('../models/User');
 const redisClient = require('../redisClient');
 const { authenticate } = require('../middleware/auth');
+const {
+    ensureWeeklyLearningRankingBadges,
+    getActiveLearningRankingBadge,
+} = require('../utils/learningBadge');
 
 // Redis client (falls back to mock when env vars are missing)
 const redis = redisClient;
@@ -566,6 +570,8 @@ const getDailyLearningRanking = async (req, res) => {
 // 週間学習時間ランキングを取得（JST 月曜0:00〜翌週月曜0:00）
 const getWeeklyLearningRanking = async (req, res) => {
     try {
+        await ensureWeeklyLearningRankingBadges();
+
         const weekStartJst = getWeekStartJst();
         const weekStartUtc = toUtcFromJstDate(weekStartJst);
         const weekEndUtc = new Date(weekStartUtc.getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -591,7 +597,7 @@ const getWeeklyLearningRanking = async (req, res) => {
         const userIds = filteredRanking.map((item) => item._id.toString());
 
         const users = await User.find({ _id: { $in: userIds } })
-            .select('username profilePicture')
+            .select('username profilePicture learningRankingBadge')
             .lean();
         const userMap = new Map(users.map((u) => [u._id.toString(), u]));
 
@@ -599,11 +605,13 @@ const getWeeklyLearningRanking = async (req, res) => {
             .map((item) => {
                 const user = userMap.get(item._id.toString());
                 if (!user) return null;
+                const activeBadge = getActiveLearningRankingBadge(user.learningRankingBadge);
                 return {
                     userId: user._id,
                     username: user.username,
                     profilePicture: user.profilePicture,
                     totalMinutes: toMinuteFloor(item.totalMinutes),
+                    learningRankingBadge: activeBadge,
                 };
             })
             .filter(Boolean)
