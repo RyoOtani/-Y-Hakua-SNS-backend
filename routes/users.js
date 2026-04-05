@@ -188,15 +188,18 @@ router.put("/:id/follow", authenticate, async (req, res) => {
     if (!user || !currentUser) {
       return res.status(404).json({ error: "ユーザーが見つかりません" });
     }
+    const followerIds = Array.isArray(user.followers)
+      ? user.followers.map((id) => id.toString())
+      : [];
     //フォロワーにいなかったらフォローできる
-    if (!user.followers.includes(currentUserId)) {
+    if (!followerIds.includes(currentUserId)) {
       await user.updateOne({
-        $push: {
+        $addToSet: {
           followers: currentUserId,
         }
       });
       await currentUser.updateOne({
-        $push: {
+        $addToSet: {
           following: req.params.id
         }
       });
@@ -302,8 +305,11 @@ router.put("/:id/unfollow", authenticate, async (req, res) => {
     if (!user || !currentUser) {
       return res.status(404).json({ error: "ユーザーが見つかりません" });
     }
+    const followerIds = Array.isArray(user.followers)
+      ? user.followers.map((id) => id.toString())
+      : [];
     //フォロワーにいたらフォロー外せる
-    if (user.followers.includes(currentUserId)) {
+    if (followerIds.includes(currentUserId)) {
       await user.updateOne({ $pull: { followers: currentUserId } });
         await currentUser.updateOne({
           $pull: {

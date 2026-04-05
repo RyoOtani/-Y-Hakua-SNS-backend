@@ -21,6 +21,18 @@ const messageWriteLimiter = rateLimit({
   message: { error: "リクエストが多すぎます。しばらくしてからお試しください。" },
 });
 
+const buildConversationLastMessageText = ({ text, attachments }) => {
+  if (typeof text === "string" && text.trim().length > 0) {
+    return text;
+  }
+
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    return "Sent an attachment";
+  }
+
+  return "";
+};
+
 // メッセージ追加
 router.post("/", authenticate, messageWriteLimiter, async (req, res) => {
   try {
@@ -88,7 +100,7 @@ router.post("/", authenticate, messageWriteLimiter, async (req, res) => {
 
     // 会話の最新メッセージを更新
     conversation.lastMessage = savedMessage._id;
-    conversation.lastMessageText = text;
+    conversation.lastMessageText = buildConversationLastMessageText({ text, attachments });
     conversation.lastMessageAt = savedMessage.createdAt;
 
     // 送信者以外のメンバーの未読カウントを増やす
@@ -198,7 +210,10 @@ router.put("/:messageId", authenticate, messageWriteLimiter, async (req, res) =>
     // 会話の最新メッセージも更新（最新メッセージの場合）
     const conversation = await Conversation.findById(message.conversationId);
     if (conversation && conversation.lastMessage?.toString() === message._id.toString()) {
-      conversation.lastMessageText = text;
+      conversation.lastMessageText = buildConversationLastMessageText({
+        text,
+        attachments: message.attachments,
+      });
       await conversation.save();
     }
 
@@ -234,7 +249,10 @@ router.delete("/:messageId", authenticate, messageWriteLimiter, async (req, res)
 
       if (lastActiveMessage) {
         conversation.lastMessage = lastActiveMessage._id;
-        conversation.lastMessageText = lastActiveMessage.text;
+        conversation.lastMessageText = buildConversationLastMessageText({
+          text: lastActiveMessage.text,
+          attachments: lastActiveMessage.attachments,
+        });
         conversation.lastMessageAt = lastActiveMessage.createdAt;
       } else {
         conversation.lastMessage = null;
