@@ -1,12 +1,28 @@
 const router = require("express").Router();
+const rateLimit = require("express-rate-limit");
 const Message = require("../models/Message");
 const Conversation = require("../models/Conversation");
 const User = require("../models/User");
 const { authenticate } = require("../middleware/auth");
 const { sendPushToUser } = require("../utils/pushNotification");
+const { normalizeReplyToPayload } = require("../utils/replyTo");
+
+const normalizeRateLimitKey = (req) => {
+  const ip = String(req.ip || req.socket?.remoteAddress || "");
+  return ip.replace(/^::ffff:/, "");
+};
+
+const messageWriteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: normalizeRateLimitKey,
+  message: { error: "リクエストが多すぎます。しばらくしてからお試しください。" },
+});
 
 // メッセージ追加
-router.post("/", authenticate, async (req, res) => {
+router.post("/", authenticate, messageWriteLimiter, async (req, res) => {
   try {
     let { conversationId, receiverId, text, attachments, replyTo } = req.body;
     const sender = req.user._id;
@@ -52,15 +68,10 @@ router.post("/", authenticate, async (req, res) => {
       return res.status(403).json({ error: "このユーザーにはメッセージを送信できません" });
     }
 
-    const normalizedReplyTo =
-      replyTo && replyTo.messageId
-        ? {
-            messageId: replyTo.messageId,
-            text: typeof replyTo.text === "string" ? replyTo.text.slice(0, 200) : "",
-            senderId: replyTo.senderId || null,
-            senderName: typeof replyTo.senderName === "string" ? replyTo.senderName.slice(0, 50) : "",
-          }
-        : null;
+    const normalizedReplyTo = await normalizeReplyToPayload({
+      replyTo,
+      conversationId,
+    });
 
     const newMessage = new Message({
       conversationId,
@@ -164,7 +175,7 @@ router.get("/:conversationId", authenticate, async (req, res) => {
 });
 
 // メッセージ編集
-router.put("/:messageId", authenticate, async (req, res) => {
+router.put("/:messageId", authenticate, messageWriteLimiter, async (req, res) => {
   try {
     const { text } = req.body;
     const message = await Message.findById(req.params.messageId);
@@ -199,7 +210,7 @@ router.put("/:messageId", authenticate, async (req, res) => {
 });
 
 // メッセージ削除（物理削除）
-router.delete("/:messageId", authenticate, async (req, res) => {
+router.delete("/:messageId", authenticate, messageWriteLimiter, async (req, res) => {
   try {
     const message = await Message.findById(req.params.messageId);
 
@@ -241,7 +252,7 @@ router.delete("/:messageId", authenticate, async (req, res) => {
 });
 
 // 単一メッセージを既読にする
-router.put("/:messageId/read", authenticate, async (req, res) => {
+router.put("/:messageId/read", authenticate, messageWriteLimiter, async (req, res) => {
   try {
     const message = await Message.findById(req.params.messageId);
 
@@ -249,8 +260,17 @@ router.put("/:messageId/read", authenticate, async (req, res) => {
       return res.status(404).json({ error: "メッセージが見つかりません" });
     }
 
+    const conversation = await Conversation.findById(message.conversationId).select("members");
+    const userId = req.user._id.toString();
+    const hasAccess = conversation
+      ? conversation.members.map((memberId) => memberId.toString()).includes(userId)
+      : false;
+    if (!hasAccess) {
+      return res.status(403).json({ error: "この会話にアクセスする権限がありません" });
+    }
+
     // 送信者以外が既読にする
-    if (message.sender.toString() !== req.user._id.toString() && !message.read) {
+    if (message.sender.toString() !== userId && !message.read) {
       message.read = true;
       message.readAt = new Date();
       await message.save();
@@ -264,7 +284,7 @@ router.put("/:messageId/read", authenticate, async (req, res) => {
 });
 
 // 会話内の全メッセージを既読にする
-router.put("/read-all/:conversationId", authenticate, async (req, res) => {
+router.put("/read-all/:conversationId", authenticate, messageWriteLimiter, async (req, res) => {
   try {
     const userId = req.user._id.toString();
     const { conversationId } = req.params;

@@ -14,6 +14,11 @@ const appleJwksClient = jwksClient({
   cacheMaxAge: 86400000, // 24 hours
 });
 
+const normalizeRateLimitKey = (req) => {
+  const ip = String(req.ip || req.socket?.remoteAddress || '');
+  return ip.replace(/^::ffff:/, '');
+};
+
 // ログイン・登録用レート制限
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15分
@@ -21,6 +26,7 @@ const authLimiter = rateLimit({
   message: { error: 'リクエストが多すぎます。しばらくしてからお試しください。' },
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: normalizeRateLimitKey,
 });
 
 // JWT秘密鍵チェック（起動時に環境変数が設定されていなければ警告）
@@ -30,6 +36,14 @@ if (!JWT_SECRET) {
 }
 const JWT_ISSUER = process.env.JWT_ISSUER || 'hakua-sns';
 const JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'hakua-clients';
+const AUTH_COOKIE_NAME = 'auth_token';
+const AUTH_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+  path: '/',
+};
 
 //ユーザー登録
 router.post("/register", authLimiter, async (req, res) => {
@@ -79,16 +93,19 @@ router.post("/login", authLimiter, async (req, res) => {
       return res.status(400).json({ error: 'メールアドレスとパスワードは必須です' });
     }
 
+    const authFailed = () =>
+      res.status(401).json({ error: 'メールアドレスまたはパスワードが正しくありません' });
+
     const user = await User.findOne({ email });
-    if (!user) return res.status(404).json({ error: "ユーザーが見つかりません" });
+    if (!user) return authFailed();
 
     // パスワードがない（Google認証ユーザー）
     if (!user.password) {
-      return res.status(400).json({ error: 'このアカウントはGoogleログインを使用してください' });
+      return authFailed();
     }
 
     const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) return res.status(400).json({ error: "パスワードが違います" });
+    if (!validPassword) return authFailed();
 
     const token = jwt.sign(
       { id: user._id, email: user.email },
@@ -99,6 +116,9 @@ router.post("/login", authLimiter, async (req, res) => {
         audience: JWT_AUDIENCE,
       }
     );
+
+    // ブラウザ向けの安全なCookieにも保存（Bearer互換は維持）
+    res.cookie(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS);
 
     const { password: _, accessToken: _a, refreshToken: _r, ...userWithoutSensitive } = user._doc;
     return res.status(200).json({ ...userWithoutSensitive, token });
@@ -193,13 +213,7 @@ router.get(
     );
 
     // Web: HttpOnly Cookieで返す
-    res.cookie('auth_token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'none',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-      path: '/',
-    });
+    res.cookie(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS);
 
     if (req._oauthPlatform === 'mobile') {
       res.clearCookie('oauth_platform');
@@ -224,7 +238,8 @@ router.get(
 </body></html>`);
     }
 
-    res.redirect(`${process.env.FRONTEND_URL}/auth/success?token=${token}`);
+    const frontendUrl = process.env.FRONTEND_URL || '';
+    res.redirect(`${frontendUrl}/auth/success`);
   }
 );
 
@@ -463,13 +478,7 @@ router.post('/apple/callback', async (req, res) => {
         );
 
         // ブラウザ用: HttpOnly Cookie で返す
-        res.cookie('auth_token', token, {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === 'production',
-          sameSite: 'none',
-          maxAge: 7 * 24 * 60 * 60 * 1000,
-          path: '/',
-        });
+        res.cookie(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS);
 
         console.log('[Auth] Apple login success via browser', {
           userId: user._id?.toString(),
@@ -502,7 +511,8 @@ router.post('/apple/callback', async (req, res) => {
         }
 
         // 成功ページにリダイレクト
-        res.redirect(`${process.env.FRONTEND_URL}/auth/success?token=${token}`);
+        const frontendUrl = process.env.FRONTEND_URL || '';
+        res.redirect(`${frontendUrl}/auth/success`);
       } catch (err) {
         if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
           console.error('Apple token verification error:', err);
@@ -525,6 +535,11 @@ router.get('/logout', (req, res) => {
     if (err) {
       return res.status(500).json({ message: 'Logout failed' });
     }
+    res.clearCookie(AUTH_COOKIE_NAME, {
+      path: '/',
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+    });
     res.status(200).json({ message: 'Logged out successfully' });
   });
 });

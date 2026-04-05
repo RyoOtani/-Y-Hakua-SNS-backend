@@ -187,9 +187,36 @@ const { Strategy: JwtStrategy, ExtractJwt } = require('passport-jwt');
 
 // ... (existing GoogleStrategy code) ...
 
+const extractCookieValue = (cookieHeader, cookieName) => {
+  if (!cookieHeader || !cookieName) return null;
+  const escapedName = cookieName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(?:^|;\\s*)${escapedName}=([^;]+)`);
+  const match = cookieHeader.match(regex);
+  if (!match || !match[1]) return null;
+
+  try {
+    return decodeURIComponent(match[1]);
+  } catch (_) {
+    return match[1];
+  }
+};
+
+const cookieTokenExtractor = (req) => {
+  if (!req) return null;
+
+  if (req.cookies && typeof req.cookies.auth_token === 'string' && req.cookies.auth_token.trim()) {
+    return req.cookies.auth_token.trim();
+  }
+
+  return extractCookieValue(req.headers?.cookie || '', 'auth_token');
+};
+
 // JWT Strategy for protecting routes
 const jwtOptions = {
-  jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+  jwtFromRequest: ExtractJwt.fromExtractors([
+    ExtractJwt.fromAuthHeaderAsBearerToken(),
+    cookieTokenExtractor,
+  ]),
   secretOrKey: process.env.JWT_SECRET,
   issuer: process.env.JWT_ISSUER || 'hakua-sns',
   audience: process.env.JWT_AUDIENCE || 'hakua-clients',

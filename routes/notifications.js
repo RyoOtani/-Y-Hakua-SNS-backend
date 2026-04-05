@@ -3,48 +3,12 @@ const Notification = require("../models/Notification");
 const User = require("../models/User");
 const redisClient = require("../redisClient");
 const { authenticate } = require("../middleware/auth");
-
-const NOTIFICATION_TYPES = ["like", "comment", "repost", "follow", "message", "new_post"];
-const NOTIFICATION_DELIVERY_MODES = ["immediate", "batched"];
-const DEFAULT_NOTIFICATION_SETTINGS = {
-    like: true,
-    comment: true,
-    repost: true,
-    follow: true,
-    message: true,
-    newPost: true,
-};
-const DEFAULT_NOTIFICATION_DELIVERY_MODE = "immediate";
-
-const parseTypes = (value) => {
-    if (typeof value !== "string") return [];
-    return value
-        .split(",")
-        .map((v) => v.trim())
-        .filter((v) => NOTIFICATION_TYPES.includes(v));
-};
-
-const normalizeNotificationSettings = (prefs = {}) => {
-    const normalized = { ...DEFAULT_NOTIFICATION_SETTINGS };
-    Object.keys(DEFAULT_NOTIFICATION_SETTINGS).forEach((key) => {
-        if (typeof prefs?.[key] === "boolean") {
-            normalized[key] = prefs[key];
-        }
-    });
-    return normalized;
-};
-
-const normalizeNotificationDeliveryMode = (mode) => {
-    if (typeof mode === "string" && NOTIFICATION_DELIVERY_MODES.includes(mode)) {
-        return mode;
-    }
-    return DEFAULT_NOTIFICATION_DELIVERY_MODE;
-};
-
-const buildSettingsResponse = (userDoc) => ({
-    ...normalizeNotificationSettings(userDoc?.notificationPreferences || {}),
-    notificationDeliveryMode: normalizeNotificationDeliveryMode(userDoc?.notificationDeliveryMode),
-});
+const {
+    NOTIFICATION_DELIVERY_MODES,
+    DEFAULT_NOTIFICATION_SETTINGS,
+    parseTypes,
+    buildSettingsResponse,
+} = require("../utils/notificationSettings");
 
 // Get notifications for authenticated user (Redis優先読み込み)
 router.get("/", authenticate, async (req, res) => {

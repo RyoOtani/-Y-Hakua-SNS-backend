@@ -13,8 +13,10 @@ const jwt = require('jsonwebtoken');
 const { Server } = require("socket.io");
 const redisClient = require('./redisClient');
 const User = require('./models/User');
+const Conversation = require('./models/Conversation');
 const { initializeFirebaseAdmin } = require('./utils/firebaseAdmin');
 const { startBatchedNotificationScheduler } = require('./utils/pushNotification');
+const { toIdString, getConversationMemberIds } = require('./utils/socketAuthorization');
 dotenv.config();
 
 const app = express();
@@ -34,6 +36,7 @@ const io = new Server(server, {
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true,
   },
+  maxHttpBufferSize: 1 * 1024 * 1024,
 });
 
 const SOCKET_JWT_SECRET = process.env.JWT_SECRET;
@@ -42,6 +45,20 @@ if (!SOCKET_JWT_SECRET) {
 }
 const SOCKET_JWT_ISSUER = process.env.JWT_ISSUER || 'hakua-sns';
 const SOCKET_JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'hakua-clients';
+
+const extractCookieValue = (cookieHeader, cookieName) => {
+  if (!cookieHeader || !cookieName) return null;
+  const escapedName = cookieName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(?:^|;\\s*)${escapedName}=([^;]+)`);
+  const match = cookieHeader.match(regex);
+  if (!match || !match[1]) return null;
+
+  try {
+    return decodeURIComponent(match[1]);
+  } catch (_) {
+    return match[1];
+  }
+};
 
 const extractSocketToken = (socket) => {
   const authToken = socket.handshake?.auth?.token;
@@ -52,6 +69,12 @@ const extractSocketToken = (socket) => {
   const authHeader = socket.handshake?.headers?.authorization;
   if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
     return authHeader.slice('Bearer '.length).trim();
+  }
+
+  const cookieHeader = socket.handshake?.headers?.cookie || '';
+  const cookieToken = extractCookieValue(cookieHeader, 'auth_token');
+  if (typeof cookieToken === 'string' && cookieToken.trim()) {
+    return cookieToken.trim();
   }
 
   return null;
@@ -106,13 +129,83 @@ const removeUser = (socketId) => {
   users = users.filter((user) => user.socketId !== socketId);
 };
 
-const getUser = (userId) => {
-  return users.find((user) => user.userId === userId);
+const CONVERSATION_MEMBERS_CACHE_TTL_MS = 5000;
+const conversationMembersCache = new Map();
+
+const getConversationMemberIdsCached = async (conversationId) => {
+  const normalizedConversationId = toIdString(conversationId);
+  if (!normalizedConversationId) return null;
+
+  const now = Date.now();
+  const cached = conversationMembersCache.get(normalizedConversationId);
+
+  if (cached && cached.expiresAt > now) {
+    return cached.memberIds;
+  }
+  if (cached) {
+    conversationMembersCache.delete(normalizedConversationId);
+  }
+
+  const conversation = await Conversation.findById(normalizedConversationId).select('members');
+  if (!conversation) return null;
+
+  const memberIds = getConversationMemberIds(conversation);
+  conversationMembersCache.set(normalizedConversationId, {
+    memberIds,
+    expiresAt: now + CONVERSATION_MEMBERS_CACHE_TTL_MS,
+  });
+
+  if (conversationMembersCache.size > 1000) {
+    for (const [key, entry] of conversationMembersCache.entries()) {
+      if (entry.expiresAt <= now) {
+        conversationMembersCache.delete(key);
+      }
+    }
+  }
+
+  return memberIds;
+};
+
+const memberIdsInclude = (memberIds, userId) => {
+  const normalizedUserId = toIdString(userId);
+  if (!normalizedUserId || !Array.isArray(memberIds)) return false;
+  return memberIds.includes(normalizedUserId);
+};
+
+const resolveReadTargets = (memberIds, readerId, senderId) => {
+  if (!Array.isArray(memberIds) || memberIds.length === 0) return [];
+
+  const normalizedReaderId = toIdString(readerId);
+  if (!normalizedReaderId) return [];
+
+  const normalizedSenderId = toIdString(senderId);
+  if (
+    normalizedSenderId &&
+    normalizedSenderId !== normalizedReaderId &&
+    memberIds.includes(normalizedSenderId)
+  ) {
+    return [normalizedSenderId];
+  }
+
+  return memberIds.filter((memberId) => memberId !== normalizedReaderId);
+};
+
+const emitToUserRoom = (userId, eventName, payload) => {
+  const normalizedUserId = toIdString(userId);
+  if (!normalizedUserId) return;
+  io.to(normalizedUserId).emit(eventName, payload);
 };
 
 // Socket.io 接続処理
 io.on("connection", (socket) => {
-  console.log("A user connected:", socket.id, `user=${socket.data.userId}`);
+  const connectedUserId = socket.data.userId;
+  if (connectedUserId) {
+    addUser(connectedUserId, socket.id);
+    socket.join(connectedUserId);
+    io.emit("getUsers", users);
+  }
+
+  console.log("A user connected:", socket.id, `user=${connectedUserId}`);
 
   // ユーザー登録
   socket.on("addUser", async (clientUserId, options = {}) => {
@@ -145,10 +238,10 @@ io.on("connection", (socket) => {
   });
 
   // メッセージ送信
-  socket.on("sendMessage", async ({ senderId, senderName, senderProfilePicture, receiverId, text, conversationId, attachments, replyTo }) => {
+  socket.on("sendMessage", async ({ senderId, senderName, senderProfilePicture, receiverId, text, conversationId, attachments, replyTo, messageId, createdAt }) => {
     try {
       const authenticatedSenderId = socket.data.userId;
-      if (!authenticatedSenderId || !receiverId) {
+      if (!authenticatedSenderId || !receiverId || !conversationId) {
         return;
       }
 
@@ -156,7 +249,21 @@ io.on("connection", (socket) => {
         console.warn(`[socket] sendMessage senderId mismatch: token=${authenticatedSenderId}, payload=${senderId}`);
       }
 
-      const receiverDoc = await User.findById(receiverId).select('blockedUsers');
+      const memberIds = await getConversationMemberIdsCached(conversationId);
+      if (!memberIds || !memberIdsInclude(memberIds, authenticatedSenderId)) {
+        console.warn(`[socket] sendMessage denied: sender ${authenticatedSenderId} is not in conversation ${conversationId}`);
+        return;
+      }
+
+      if (!memberIdsInclude(memberIds, receiverId)) {
+        console.warn(`[socket] sendMessage denied: receiver ${receiverId} is not in conversation ${conversationId}`);
+        return;
+      }
+
+      const [receiverDoc, senderDoc] = await Promise.all([
+        User.findById(receiverId).select('blockedUsers'),
+        User.findById(authenticatedSenderId).select('username profilePicture'),
+      ]);
       const blocked = receiverDoc?.blockedUsers || [];
       const isBlocked = blocked.map((id) => id.toString()).includes(String(authenticatedSenderId));
 
@@ -164,71 +271,91 @@ io.on("connection", (socket) => {
         return;
       }
 
-      const senderDoc = await User.findById(authenticatedSenderId).select('username profilePicture');
-      const user = getUser(receiverId);
-      if (user) {
-        io.to(user.socketId).emit("getMessage", {
-          senderId: authenticatedSenderId,
-          senderName: senderDoc?.username || senderName,
-          senderProfilePicture: senderDoc?.profilePicture || senderProfilePicture,
-          text,
-          conversationId,
-          attachments: attachments || [],
-          replyTo: replyTo || null,
-          createdAt: new Date(),
-        });
-      }
+      emitToUserRoom(receiverId, "getMessage", {
+        messageId: messageId || null,
+        senderId: authenticatedSenderId,
+        senderName: senderDoc?.username || senderName,
+        senderProfilePicture: senderDoc?.profilePicture || senderProfilePicture,
+        text,
+        conversationId,
+        attachments: attachments || [],
+        replyTo: replyTo || null,
+        createdAt: createdAt || new Date().toISOString(),
+      });
     } catch (err) {
       console.error('sendMessage socket error:', err);
     }
   });
 
   // メッセージ既読通知
-  socket.on("markAsRead", ({ conversationId, senderId }) => {
+  socket.on("markAsRead", async ({ conversationId, senderId }) => {
     const readerId = socket.data.userId;
-    if (!readerId || !senderId) {
+    if (!readerId || !conversationId) {
       return;
     }
 
-    const sender = getUser(senderId);
-    if (sender) {
-      io.to(sender.socketId).emit("messageRead", {
-        conversationId,
-        readerId,
-        readAt: new Date(),
+    try {
+      const memberIds = await getConversationMemberIdsCached(conversationId);
+      if (!memberIds || !memberIdsInclude(memberIds, readerId)) {
+        return;
+      }
+
+      const targetUserIds = resolveReadTargets(memberIds, readerId, senderId);
+      targetUserIds.forEach((targetUserId) => {
+        emitToUserRoom(targetUserId, "messageRead", {
+          conversationId,
+          readerId,
+          readAt: new Date().toISOString(),
+        });
       });
+    } catch (err) {
+      console.error('markAsRead socket error:', err);
     }
   });
 
   // タイピング中の通知
-  socket.on("typing", ({ conversationId, receiverId }) => {
+  socket.on("typing", async ({ conversationId, receiverId }) => {
     const userId = socket.data.userId;
-    if (!userId || !receiverId) {
+    if (!userId || !receiverId || !conversationId) {
       return;
     }
 
-    const user = getUser(receiverId);
-    if (user) {
-      io.to(user.socketId).emit("userTyping", {
+    try {
+      const memberIds = await getConversationMemberIdsCached(conversationId);
+      if (!memberIds) return;
+      if (!memberIdsInclude(memberIds, userId) || !memberIdsInclude(memberIds, receiverId)) {
+        return;
+      }
+
+      emitToUserRoom(receiverId, "userTyping", {
         conversationId,
         userId,
       });
+    } catch (err) {
+      console.error('typing socket error:', err);
     }
   });
 
   // タイピング停止の通知
-  socket.on("stopTyping", ({ conversationId, receiverId }) => {
+  socket.on("stopTyping", async ({ conversationId, receiverId }) => {
     const userId = socket.data.userId;
-    if (!userId || !receiverId) {
+    if (!userId || !receiverId || !conversationId) {
       return;
     }
 
-    const user = getUser(receiverId);
-    if (user) {
-      io.to(user.socketId).emit("userStopTyping", {
+    try {
+      const memberIds = await getConversationMemberIdsCached(conversationId);
+      if (!memberIds) return;
+      if (!memberIdsInclude(memberIds, userId) || !memberIdsInclude(memberIds, receiverId)) {
+        return;
+      }
+
+      emitToUserRoom(receiverId, "userStopTyping", {
         conversationId,
         userId,
       });
+    } catch (err) {
+      console.error('stopTyping socket error:', err);
     }
   });
 

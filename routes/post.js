@@ -865,7 +865,7 @@ router.get("/:id/comments", optionalAuthenticate, async (req, res) => {
 
     const comments = await Comment.find({ postId: req.params.id })
       .populate("userId", "username profilePicture")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: 1 });
     res.status(200).json(comments);
   } catch (err) {
     console.error('Get comments error:', err);

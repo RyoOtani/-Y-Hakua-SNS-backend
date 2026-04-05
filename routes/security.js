@@ -2,7 +2,22 @@ const express = require('express');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
+const rateLimit = require('express-rate-limit');
 const User = require('../models/User');
+
+const normalizeRateLimitKey = (req) => {
+        const ip = String(req.ip || req.socket?.remoteAddress || '');
+        return ip.replace(/^::ffff:/, '');
+};
+
+const riscLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 600,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: normalizeRateLimitKey,
+    message: 'Too many requests',
+});
 
 // Googleの公開鍵取得クライアント設定
 const client = jwksClient({
@@ -33,7 +48,7 @@ function getKey(header, callback) {
  *   - tokens-revoked: トークン取り消し
  *   - account-credential-change-required: 資格情報変更要求
  */
-router.post('/risc', (req, res) => {
+router.post('/risc', riscLimiter, (req, res) => {
     // GoogleのRISCはContent-Type: application/secevent+jwtで
     // Raw BodyがJWT文字列としてそのまま送られてくる
     const token = typeof req.body === 'string' ? req.body.trim() : (req.body?.token || null);

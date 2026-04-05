@@ -11,8 +11,34 @@ const { sendPushToUser } = require("../utils/pushNotification");
 const sanitizeUser = (user) => {
   if (!user) return null;
   const obj = user._doc || user;
-  const { password, accessToken, refreshToken, fcmToken, blockedUsers, updatedAt, __v, ...safe } = obj;
-  return safe;
+  const {
+    password,
+    accessToken,
+    refreshToken,
+    fcmToken,
+    blockedUsers,
+    followers,
+    following,
+    closeFriends,
+    email,
+    notificationPreferences,
+    notificationDeliveryMode,
+    lastBatchedNotificationSentAt,
+    accountLocked,
+    lockReason,
+    lockedAt,
+    requiresReauth,
+    updatedAt,
+    __v,
+    ...safe
+  } = obj;
+
+  return {
+    ...safe,
+    followersCount: Array.isArray(followers) ? followers.length : 0,
+    followingCount: Array.isArray(following) ? following.length : 0,
+    closeFriendsCount: Array.isArray(closeFriends) ? closeFriends.length : 0,
+  };
 };
 
 //CRUD

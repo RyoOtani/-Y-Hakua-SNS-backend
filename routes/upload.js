@@ -9,6 +9,11 @@ const { authenticate } = require("../middleware/auth");
 
 dotenv.config();
 
+const normalizeRateLimitKey = (req) => {
+  const ip = String(req.ip || req.socket?.remoteAddress || "");
+  return ip.replace(/^::ffff:/, "");
+};
+
 // Cloudinary Configuration
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -53,6 +58,7 @@ const uploadLimiter = rateLimit({
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: normalizeRateLimitKey,
 });
 
 // 画像を1MB以下に近づけるための圧縮（段階的にリサイズ＋品質調整）

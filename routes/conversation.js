@@ -1,7 +1,10 @@
 const router = require("express").Router();
 const Conversation = require("../models/Conversation");
 const Message = require("../models/Message");
+const User = require("../models/User");
 const { authenticate } = require("../middleware/auth");
+const { hasConversationAccess, getConversationMemberIds } = require("../utils/socketAuthorization");
+const { normalizeReplyToPayload } = require("../utils/replyTo");
 
 // 新規会話作成
 router.post("/", authenticate, async (req, res) => {
@@ -105,7 +108,7 @@ router.delete("/:conversationId", authenticate, async (req, res) => {
     }
 
     // メンバーのみ削除可能
-    if (!conversation.members.some((m) => m.toString() === userId)) {
+    if (!hasConversationAccess(conversation, userId)) {
       return res.status(403).json({ error: "この会話を削除する権限がありません" });
     }
 
@@ -185,25 +188,45 @@ router.put('/unread-clear-all', authenticate, async (req, res) => {
 router.post("/message", authenticate, async (req, res) => {
   try {
     const sender = req.user._id;
-    const { conversationId, text, attachments } = req.body;
+    const { conversationId, text, attachments, replyTo } = req.body;
 
     // 会話メンバーシップの確認
     const conversation = await Conversation.findById(conversationId);
-    if (!conversation || !conversation.members.map(m => m.toString()).includes(sender.toString())) {
+    if (!conversation || !hasConversationAccess(conversation, sender)) {
       return res.status(403).json({ error: "この会話にメッセージを送る権限がありません" });
     }
+
+    const memberIds = getConversationMemberIds(conversation);
+    const receiverIds = memberIds.filter((memberId) => memberId !== sender.toString());
+
+    const receivers = await User.find({ _id: { $in: receiverIds } }).select('_id blockedUsers');
+    const blockedByAnyReceiver = receivers.some((receiver) => {
+      const blocked = receiver.blockedUsers || [];
+      return blocked.map((id) => id.toString()).includes(sender.toString());
+    });
+
+    if (blockedByAnyReceiver) {
+      return res.status(403).json({ error: "このユーザーにはメッセージを送信できません" });
+    }
+
+    const normalizedReplyTo = await normalizeReplyToPayload({
+      replyTo,
+      conversationId,
+    });
 
     const newMessage = new Message({
       conversationId,
       sender,
       text,
+      replyTo: normalizedReplyTo,
       attachments: attachments || [],
     });
     const savedMessage = await newMessage.save();
+    const populatedMessage = await Message.findById(savedMessage._id).populate("sender", "username profilePicture");
 
     // 会話の最新メッセージを更新
     conversation.lastMessage = savedMessage._id;
-    conversation.lastMessageText = text;
+    conversation.lastMessageText = text || (Array.isArray(attachments) && attachments.length > 0 ? "Sent an attachment" : "");
     conversation.lastMessageAt = savedMessage.createdAt;
 
     // 送信者以外の未読カウントを増やす
@@ -216,7 +239,7 @@ router.post("/message", authenticate, async (req, res) => {
 
     await conversation.save();
 
-    res.status(201).json(savedMessage);
+    res.status(201).json(populatedMessage);
   } catch (err) {
     console.error("Message create error:", err);
     res.status(500).json({ error: "メッセージの送信に失敗しました" });
@@ -228,17 +251,22 @@ router.get("/message/:conversationId", authenticate, async (req, res) => {
   try {
     // 会話メンバーシップの確認
     const conversation = await Conversation.findById(req.params.conversationId);
-    if (!conversation || !conversation.members.map(m => m.toString()).includes(req.user._id.toString())) {
+    if (!conversation || !hasConversationAccess(conversation, req.user._id.toString())) {
       return res.status(403).json({ error: "この会話を閲覧する権限がありません" });
     }
+
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 50);
+    const skip = (page - 1) * limit;
 
     const messages = await Message.find({
       conversationId: req.params.conversationId,
       deletedAt: null,
     })
       .populate("sender", "username profilePicture")
-      .sort({ createdAt: 1 })
-      .limit(100);
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
 
     res.status(200).json(messages);
   } catch (err) {
