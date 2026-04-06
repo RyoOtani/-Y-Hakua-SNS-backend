@@ -6,6 +6,14 @@ const { authenticate } = require("../middleware/auth");
 const { hasConversationAccess, getConversationMemberIds } = require("../utils/socketAuthorization");
 const { normalizeReplyToPayload } = require("../utils/replyTo");
 
+const ACTIVE_MESSAGE_FILTER = { $ne: "hidden_by_reports" };
+
+const buildActiveMessageQuery = (baseQuery = {}) => ({
+  ...baseQuery,
+  deletedAt: null,
+  moderationStatus: ACTIVE_MESSAGE_FILTER,
+});
+
 // 新規会話作成
 router.post("/", authenticate, async (req, res) => {
   try {
@@ -155,12 +163,11 @@ router.put('/unread-clear-all', authenticate, async (req, res) => {
 
     if (conversationIds.length > 0) {
       await Message.updateMany(
-        {
+        buildActiveMessageQuery({
           conversationId: { $in: conversationIds },
           sender: { $ne: req.user._id },
           read: false,
-          deletedAt: null,
-        },
+        }),
         {
           $set: {
             read: true,
@@ -199,13 +206,17 @@ router.post("/message", authenticate, async (req, res) => {
     const memberIds = getConversationMemberIds(conversation);
     const receiverIds = memberIds.filter((memberId) => memberId !== sender.toString());
 
-    const receivers = await User.find({ _id: { $in: receiverIds } }).select('_id blockedUsers');
-    const blockedByAnyReceiver = receivers.some((receiver) => {
+    const receivers = await User.find({ _id: { $in: receiverIds } }).select('_id blockedUsers mutedUsers');
+    const blockedOrMutedByAnyReceiver = receivers.some((receiver) => {
       const blocked = receiver.blockedUsers || [];
-      return blocked.map((id) => id.toString()).includes(sender.toString());
+      const muted = receiver.mutedUsers || [];
+      const senderId = sender.toString();
+      const isBlocked = blocked.map((id) => id.toString()).includes(senderId);
+      const isMuted = muted.map((id) => id.toString()).includes(senderId);
+      return isBlocked || isMuted;
     });
 
-    if (blockedByAnyReceiver) {
+    if (blockedOrMutedByAnyReceiver) {
       return res.status(403).json({ error: "このユーザーにはメッセージを送信できません" });
     }
 
@@ -259,10 +270,11 @@ router.get("/message/:conversationId", authenticate, async (req, res) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 50);
     const skip = (page - 1) * limit;
 
-    const messages = await Message.find({
-      conversationId: req.params.conversationId,
-      deletedAt: null,
-    })
+    const messages = await Message.find(
+      buildActiveMessageQuery({
+        conversationId: req.params.conversationId,
+      })
+    )
       .populate("sender", "username profilePicture")
       .sort({ createdAt: -1 })
       .skip(skip)

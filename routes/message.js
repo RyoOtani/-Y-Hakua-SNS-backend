@@ -6,6 +6,16 @@ const User = require("../models/User");
 const { authenticate } = require("../middleware/auth");
 const { sendPushToUser } = require("../utils/pushNotification");
 const { normalizeReplyToPayload } = require("../utils/replyTo");
+const {
+  REPORT_TARGET_TYPES,
+  normalizeReportReason,
+  normalizeReportDetails,
+  normalizeSafetyActions,
+  createModerationReport,
+  applyReporterSafetyActions,
+  countReportsForTarget,
+  syncTargetModerationState,
+} = require("../utils/moderation");
 
 const normalizeRateLimitKey = (req) => {
   const ip = String(req.ip || req.socket?.remoteAddress || "");
@@ -31,6 +41,40 @@ const buildConversationLastMessageText = ({ text, attachments }) => {
   }
 
   return "";
+};
+
+const ACTIVE_MESSAGE_FILTER = { $ne: "hidden_by_reports" };
+
+const isMessageHidden = (message) => message?.moderationStatus === "hidden_by_reports";
+
+const buildActiveMessageQuery = (baseQuery = {}) => ({
+  ...baseQuery,
+  deletedAt: null,
+  moderationStatus: ACTIVE_MESSAGE_FILTER,
+});
+
+const refreshConversationLastMessage = async (conversationId) => {
+  const conversation = await Conversation.findById(conversationId);
+  if (!conversation) return;
+
+  const lastActiveMessage = await Message.findOne(
+    buildActiveMessageQuery({ conversationId })
+  ).sort({ createdAt: -1 });
+
+  if (lastActiveMessage) {
+    conversation.lastMessage = lastActiveMessage._id;
+    conversation.lastMessageText = buildConversationLastMessageText({
+      text: lastActiveMessage.text,
+      attachments: lastActiveMessage.attachments,
+    });
+    conversation.lastMessageAt = lastActiveMessage.createdAt;
+  } else {
+    conversation.lastMessage = null;
+    conversation.lastMessageText = null;
+    conversation.lastMessageAt = null;
+  }
+
+  await conversation.save();
 };
 
 const ALLOWED_MESSAGE_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🎉", "👏", "🤔", "🔥"];
@@ -84,13 +128,17 @@ router.post("/", authenticate, messageWriteLimiter, async (req, res) => {
       .map((memberId) => memberId.toString())
       .filter((memberId) => memberId !== sender.toString());
 
-    const receivers = await User.find({ _id: { $in: receiverIds } }).select('_id blockedUsers');
-    const blockedByAnyReceiver = receivers.some((receiver) => {
+    const receivers = await User.find({ _id: { $in: receiverIds } }).select('_id blockedUsers mutedUsers');
+    const blockedOrMutedByAnyReceiver = receivers.some((receiver) => {
       const blocked = receiver.blockedUsers || [];
-      return blocked.map((id) => id.toString()).includes(sender.toString());
+      const muted = receiver.mutedUsers || [];
+      const senderId = sender.toString();
+      const isBlocked = blocked.map((id) => id.toString()).includes(senderId);
+      const isMuted = muted.map((id) => id.toString()).includes(senderId);
+      return isBlocked || isMuted;
     });
 
-    if (blockedByAnyReceiver) {
+    if (blockedOrMutedByAnyReceiver) {
       return res.status(403).json({ error: "このユーザーにはメッセージを送信できません" });
     }
 
@@ -136,13 +184,15 @@ router.post("/", authenticate, messageWriteLimiter, async (req, res) => {
         ? `${senderName}: ${messagePreview.slice(0, 80)}`
         : `${senderName}さんからメッセージが届きました`;
 
-      const receivers = await User.find({ _id: { $in: receiverIds } }).select('_id blockedUsers notificationPreferences');
+      const receivers = await User.find({ _id: { $in: receiverIds } }).select('_id blockedUsers mutedUsers notificationPreferences');
       const pushTargetIds = receivers
         .filter((receiver) => {
           const blocked = receiver.blockedUsers || [];
+          const muted = receiver.mutedUsers || [];
           const isBlocked = blocked.map((id) => id.toString()).includes(sender.toString());
+          const isMuted = muted.map((id) => id.toString()).includes(sender.toString());
           const messageNotifEnabled = receiver.notificationPreferences?.message !== false;
-          return !isBlocked && messageNotifEnabled;
+          return !isBlocked && !isMuted && messageNotifEnabled;
         })
         .map((receiver) => receiver._id.toString());
 
@@ -184,10 +234,11 @@ router.get("/:conversationId", authenticate, async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit) || 20, 50);
     const skip = (page - 1) * limit;
 
-    const messages = await Message.find({
-      conversationId: req.params.conversationId,
-      deletedAt: null,
-    })
+    const messages = await Message.find(
+      buildActiveMessageQuery({
+        conversationId: req.params.conversationId,
+      })
+    )
       .populate("sender", "username profilePicture")
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -213,7 +264,7 @@ router.put("/:messageId/reaction", authenticate, messageWriteLimiter, async (req
     }
 
     const message = await Message.findById(req.params.messageId);
-    if (!message || message.deletedAt) {
+    if (!message || message.deletedAt || isMessageHidden(message)) {
       return res.status(404).json({ error: "メッセージが見つかりません" });
     }
 
@@ -296,6 +347,90 @@ router.put("/:messageId/reaction", authenticate, messageWriteLimiter, async (req
   }
 });
 
+router.post("/:messageId/report", authenticate, messageWriteLimiter, async (req, res) => {
+  try {
+    const reporterId = req.user._id;
+    const message = await Message.findById(req.params.messageId)
+      .select("conversationId sender moderationStatus moderationSummary deletedAt");
+
+    if (!message || message.deletedAt || isMessageHidden(message)) {
+      return res.status(404).json({ error: "メッセージが見つかりません" });
+    }
+
+    const conversation = await Conversation.findById(message.conversationId).select("members");
+    const hasAccess = conversation
+      ? conversation.members.map((memberId) => memberId.toString()).includes(reporterId.toString())
+      : false;
+
+    if (!hasAccess) {
+      return res.status(403).json({ error: "このメッセージを通報する権限がありません" });
+    }
+
+    const targetOwnerId = message.sender;
+    if (targetOwnerId.toString() === reporterId.toString()) {
+      return res.status(400).json({ error: "自分のメッセージは通報できません" });
+    }
+
+    const reason = normalizeReportReason(req.body?.reason);
+    const details = normalizeReportDetails(req.body?.details);
+    const safetyActions = normalizeSafetyActions(req.body?.safetyActions);
+
+    const { duplicate } = await createModerationReport({
+      targetType: REPORT_TARGET_TYPES.MESSAGE,
+      targetId: message._id,
+      targetOwnerId,
+      reporterId,
+      reason,
+      details,
+      safetyActions,
+    });
+
+    if (duplicate) {
+      return res.status(409).json({ error: "このメッセージはすでに通報済みです" });
+    }
+
+    const appliedSafety = await applyReporterSafetyActions({
+      reporterId,
+      targetOwnerId,
+      safetyActions,
+    });
+
+    const reportCount = await countReportsForTarget(REPORT_TARGET_TYPES.MESSAGE, message._id);
+    const moderationState = await syncTargetModerationState({
+      targetDoc: message,
+      reportCount,
+    });
+
+    if (moderationState.hiddenNow) {
+      await refreshConversationLastMessage(message.conversationId);
+
+      const io = req.app.get("io");
+      if (io && conversation) {
+        conversation.members
+          .map((memberId) => memberId.toString())
+          .forEach((memberId) => {
+            io.to(memberId).emit("messageModerationUpdated", {
+              conversationId: message.conversationId.toString(),
+              messageId: message._id.toString(),
+              hidden: true,
+            });
+          });
+      }
+    }
+
+    return res.status(201).json({
+      message: "メッセージを通報しました",
+      reportCount: moderationState.reportCount,
+      hidden: moderationState.hidden,
+      threshold: moderationState.threshold,
+      appliedSafety,
+    });
+  } catch (err) {
+    console.error("Message report error:", err);
+    return res.status(500).json({ error: "メッセージの通報に失敗しました" });
+  }
+});
+
 // メッセージ編集
 router.put("/:messageId", authenticate, messageWriteLimiter, async (req, res) => {
   try {
@@ -303,6 +438,9 @@ router.put("/:messageId", authenticate, messageWriteLimiter, async (req, res) =>
     const message = await Message.findById(req.params.messageId);
 
     if (!message) {
+      return res.status(404).json({ error: "メッセージが見つかりません" });
+    }
+    if (isMessageHidden(message)) {
       return res.status(404).json({ error: "メッセージが見つかりません" });
     }
 
@@ -350,27 +488,7 @@ router.delete("/:messageId", authenticate, messageWriteLimiter, async (req, res)
 
     await Message.findByIdAndDelete(req.params.messageId);
 
-    // 会話の最新メッセージを更新（削除されたメッセージが最新だった場合）
-    const conversation = await Conversation.findById(message.conversationId);
-    if (conversation && conversation.lastMessage?.toString() === message._id.toString()) {
-      const lastActiveMessage = await Message.findOne({
-        conversationId: message.conversationId,
-      }).sort({ createdAt: -1 });
-
-      if (lastActiveMessage) {
-        conversation.lastMessage = lastActiveMessage._id;
-        conversation.lastMessageText = buildConversationLastMessageText({
-          text: lastActiveMessage.text,
-          attachments: lastActiveMessage.attachments,
-        });
-        conversation.lastMessageAt = lastActiveMessage.createdAt;
-      } else {
-        conversation.lastMessage = null;
-        conversation.lastMessageText = null;
-        conversation.lastMessageAt = null;
-      }
-      await conversation.save();
-    }
+    await refreshConversationLastMessage(message.conversationId);
 
     res.status(200).json({ message: "メッセージを削除しました" });
   } catch (err) {
@@ -385,6 +503,9 @@ router.put("/:messageId/read", authenticate, messageWriteLimiter, async (req, re
     const message = await Message.findById(req.params.messageId);
 
     if (!message) {
+      return res.status(404).json({ error: "メッセージが見つかりません" });
+    }
+    if (isMessageHidden(message)) {
       return res.status(404).json({ error: "メッセージが見つかりません" });
     }
 
@@ -426,12 +547,11 @@ router.put("/read-all/:conversationId", authenticate, messageWriteLimiter, async
     // 送信者以外が既読にする
     const readAt = new Date();
     const readResult = await Message.updateMany(
-      {
+      buildActiveMessageQuery({
         conversationId,
         sender: { $ne: req.user._id },
         read: false,
-        deletedAt: null,
-      },
+      }),
       {
         $set: {
           read: true,

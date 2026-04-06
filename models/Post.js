@@ -54,6 +54,21 @@ const PostSchema = new mongoose.Schema(
       enum: ['public', 'close_friends'],
       default: 'public',
     },
+    moderationStatus: {
+      type: String,
+      enum: ['active', 'hidden_by_reports'],
+      default: 'active',
+    },
+    moderationSummary: {
+      reportedCount: {
+        type: Number,
+        default: 0,
+      },
+      lastReportedAt: {
+        type: Date,
+        default: null,
+      },
+    },
   },
   { timestamps: true }
 );

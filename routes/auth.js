@@ -45,6 +45,22 @@ const AUTH_COOKIE_OPTIONS = {
   path: '/',
 };
 
+const getUsernameForLog = (user) => {
+  if (user?.username) return String(user.username);
+  if (user?._id) return String(user._id);
+  return 'unknown';
+};
+
+const logLoginSuccess = ({ method, user, extra = {} }) => {
+  const username = getUsernameForLog(user);
+  console.log(`[Auth] login success method=${method} username： ${username}`, {
+    userId: user?._id ? String(user._id) : null,
+    email: user?.email || null,
+    ...extra,
+    at: new Date().toISOString(),
+  });
+};
+
 //ユーザー登録
 router.post("/register", authLimiter, async (req, res) => {
   try {
@@ -120,6 +136,8 @@ router.post("/login", authLimiter, async (req, res) => {
     // ブラウザ向けの安全なCookieにも保存（Bearer互換は維持）
     res.cookie(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS);
 
+    logLoginSuccess({ method: 'password', user });
+
     const { password: _, accessToken: _a, refreshToken: _r, ...userWithoutSensitive } = user._doc;
     return res.status(200).json({ ...userWithoutSensitive, token });
   } catch (err) {
@@ -192,13 +210,10 @@ router.get(
     })(req, res, next);
   },
   (req, res) => {
-    // ログストリーム用: 誰がGoogleログインしたかを記録（トークンは出さない）
-    console.log('[Auth] Google login success', {
-      userId: req.user?._id?.toString(),
-      email: req.user?.email,
-      username: req.user?.username,
-      platform: req._oauthPlatform || 'web',
-      at: new Date().toISOString(),
+    logLoginSuccess({
+      method: 'google',
+      user: req.user,
+      extra: { platform: req._oauthPlatform || 'web' },
     });
 
     // JWTトークンを生成
@@ -364,6 +379,8 @@ router.post('/apple', authLimiter, async (req, res) => {
       }
     );
 
+    logLoginSuccess({ method: 'apple-native', user });
+
     const { password: _, accessToken: _a, refreshToken: _r, ...userWithoutSensitive } = user._doc;
     return res.status(200).json({ ...userWithoutSensitive, token });
   } catch (err) {
@@ -480,11 +497,10 @@ router.post('/apple/callback', async (req, res) => {
         // ブラウザ用: HttpOnly Cookie で返す
         res.cookie(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS);
 
-        console.log('[Auth] Apple login success via browser', {
-          userId: user._id?.toString(),
-          email: user.email,
-          username: user.username,
-          at: new Date().toISOString(),
+        logLoginSuccess({
+          method: 'apple-browser',
+          user,
+          extra: { platform: oauthPlatform || 'web' },
         });
 
         if (oauthPlatform === 'mobile') {

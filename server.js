@@ -18,10 +18,17 @@ const { initializeFirebaseAdmin } = require('./utils/firebaseAdmin');
 const { startBatchedNotificationScheduler } = require('./utils/pushNotification');
 const { startWeeklyLearningBadgeScheduler } = require('./utils/learningBadge');
 const { toIdString, getConversationMemberIds } = require('./utils/socketAuthorization');
+const {
+  requestMetricsMiddleware,
+  recordSocketConnection,
+  recordSocketDisconnection,
+  installProcessLevelHandlers,
+} = require('./utils/observability');
 dotenv.config();
 
 const app = express();
 app.set('trust proxy', 1); // Enable trusting proxy for Secure cookies
+installProcessLevelHandlers();
 const server = http.createServer(app);
 const allowedOrigins = [
   process.env.FRONTEND_URL,
@@ -126,6 +133,8 @@ const addUser = (userId, socketId) => {
   return { alreadyOnline: false };
 };
 
+const formatUsernameForPresenceLog = (username) => `username： ${String(username || 'unknown')}`;
+
 const removeUser = (socketId) => {
   users = users.filter((user) => user.socketId !== socketId);
 };
@@ -204,6 +213,10 @@ io.on("connection", (socket) => {
     addUser(connectedUserId, socket.id);
     socket.join(connectedUserId);
     io.emit("getUsers", users);
+    recordSocketConnection({
+      userId: connectedUserId,
+      socketId: socket.id,
+    });
   }
 
   console.log("A user connected:", socket.id, `user=${connectedUserId}`);
@@ -225,13 +238,14 @@ io.on("connection", (socket) => {
     try {
       const resolvedUser = await User.findById(userId).select('username');
       const username = resolvedUser?.username || userId;
+      const usernameLabel = formatUsernameForPresenceLog(username);
 
       if (source === 'app_resume') {
-        console.log(`[presence] ${username} is online again (app resume)`);
+        console.log(`[presence] online again (app resume) ${usernameLabel}`);
       } else if (addResult?.alreadyOnline) {
-        console.log(`[presence] ${username} is online (socket reconnected)`);
+        console.log(`[presence] online (socket reconnected) ${usernameLabel}`);
       } else {
-        console.log(`[presence] ${username} is online`);
+        console.log(`[presence] online ${usernameLabel}`);
       }
     } catch (err) {
       console.error('Failed to resolve username for presence log:', err);
@@ -262,13 +276,15 @@ io.on("connection", (socket) => {
       }
 
       const [receiverDoc, senderDoc] = await Promise.all([
-        User.findById(receiverId).select('blockedUsers'),
+        User.findById(receiverId).select('blockedUsers mutedUsers'),
         User.findById(authenticatedSenderId).select('username profilePicture'),
       ]);
       const blocked = receiverDoc?.blockedUsers || [];
+      const muted = receiverDoc?.mutedUsers || [];
       const isBlocked = blocked.map((id) => id.toString()).includes(String(authenticatedSenderId));
+      const isMuted = muted.map((id) => id.toString()).includes(String(authenticatedSenderId));
 
-      if (isBlocked) {
+      if (isBlocked || isMuted) {
         return;
       }
 
@@ -361,10 +377,15 @@ io.on("connection", (socket) => {
   });
 
   // 切断処理
-  socket.on("disconnect", () => {
+  socket.on("disconnect", (reason) => {
     console.log("A user disconnected:", socket.id);
     removeUser(socket.id);
     io.emit("getUsers", users);
+    recordSocketDisconnection({
+      userId: connectedUserId,
+      socketId: socket.id,
+      reason,
+    });
   });
 });
 
@@ -377,6 +398,7 @@ app.use(cors({
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true
 }));
+app.use(requestMetricsMiddleware);
 //Google RISC用のミドルウェア設定
 app.use(express.text({ type: 'application/secevent+jwt' }));
 

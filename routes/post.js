@@ -9,12 +9,24 @@ const { authenticate, optionalAuthenticate } = require("../middleware/auth");
 const { sendPushToUser } = require("../utils/pushNotification");
 const { censorText } = require("../utils/contentFilter");
 const {
+  REPORT_TARGET_TYPES,
+  normalizeReportReason,
+  normalizeReportDetails,
+  normalizeSafetyActions,
+  createModerationReport,
+  applyReporterSafetyActions,
+  countReportsForTarget,
+  syncTargetModerationState,
+} = require("../utils/moderation");
+const {
   POST_VISIBILITY,
   normalizePostVisibility,
   buildViewerVisibilityContext,
   buildVisibilityQueryForViewer,
   canViewerSeePost,
 } = require("../utils/postVisibility");
+
+const ACTIVE_CONTENT_STATUS = { $ne: "hidden_by_reports" };
 
 const isNotificationEnabled = (userDoc, key) => {
   const prefs = userDoc?.notificationPreferences;
@@ -39,6 +51,8 @@ const hasCloseFriends = async (userId) => {
   const me = await User.findById(userId).select('closeFriends');
   return Boolean(me && Array.isArray(me.closeFriends) && me.closeFriends.length > 0);
 };
+
+const isHiddenByModeration = (doc) => doc?.moderationStatus === 'hidden_by_reports';
 
 //create a post
 router.post("/", authenticate, async (req, res) => {
@@ -193,6 +207,9 @@ router.put("/:id/like", authenticate, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
     if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
+    if (isHiddenByModeration(post)) {
+      return res.status(404).json({ error: '投稿が見つかりません' });
+    }
 
     const viewerContext = await buildViewerVisibilityContext(req.user._id);
     if (!canViewerSeePost(post, viewerContext)) {
@@ -300,6 +317,9 @@ router.put("/:id/repost", authenticate, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
     if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
+    if (isHiddenByModeration(post)) {
+      return res.status(404).json({ error: '投稿が見つかりません' });
+    }
 
     const viewerContext = await buildViewerVisibilityContext(req.user._id);
     if (!canViewerSeePost(post, viewerContext)) {
@@ -391,6 +411,9 @@ router.put('/:id/view', authenticate, async (req, res) => {
   try {
     const post = await Post.findById(req.params.id);
     if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
+    if (isHiddenByModeration(post)) {
+      return res.status(404).json({ error: '投稿が見つかりません' });
+    }
 
     const viewerContext = await buildViewerVisibilityContext(req.user._id);
     if (!canViewerSeePost(post, viewerContext)) {
@@ -434,9 +457,13 @@ router.get("/timeline/all", optionalAuthenticate, async (req, res) => {
     const skip = (page - 1) * limit;
     const viewerContext = await buildViewerVisibilityContext(req.user?._id);
     const visibilityFilter = buildVisibilityQueryForViewer(viewerContext);
+    const postMatchFilter = {
+      ...visibilityFilter,
+      moderationStatus: ACTIVE_CONTENT_STATUS,
+    };
 
     const allPosts = await Post.aggregate([
-      { $match: visibilityFilter },
+      { $match: postMatchFilter },
       { $sort: { createdAt: -1 } },
       { $skip: skip },
       { $limit: limit },
@@ -491,7 +518,11 @@ router.get("/profile/:username", optionalAuthenticate, async (req, res) => {
     const viewerContext = await buildViewerVisibilityContext(req.user?._id);
     const visibilityFilter = buildVisibilityQueryForViewer(viewerContext);
 
-    const posts = await Post.find({ userId: user._id, ...visibilityFilter })
+    const posts = await Post.find({
+      userId: user._id,
+      moderationStatus: ACTIVE_CONTENT_STATUS,
+      ...visibilityFilter,
+    })
       .populate("userId", "username profilePicture")
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -537,6 +568,7 @@ router.get('/search', optionalAuthenticate, async (req, res) => {
 
     const posts = await Post.find({
       ...visibilityFilter,
+      moderationStatus: ACTIVE_CONTENT_STATUS,
       desc: { $regex: sanitizedQuery, $options: 'i' }
     })
       .populate('userId', 'username profilePicture')
@@ -578,6 +610,9 @@ router.get("/like-ranking", optionalAuthenticate, async (req, res) => {
               "userId",
               "username profilePicture"
             );
+            if (isHiddenByModeration(post)) {
+              return null;
+            }
             if (!canViewerSeePost(post, viewerContext)) {
               return null;
             }
@@ -634,7 +669,10 @@ router.get("/like-ranking", optionalAuthenticate, async (req, res) => {
 
     // 対応する投稿情報を取得
     const postsMap = {};
-    const posts = await Post.find({ _id: { $in: agg.map((a) => a._id) } }).populate(
+    const posts = await Post.find({
+      _id: { $in: agg.map((a) => a._id) },
+      moderationStatus: ACTIVE_CONTENT_STATUS,
+    }).populate(
       "userId",
       "username profilePicture"
     );
@@ -732,6 +770,9 @@ router.get("/:id", optionalAuthenticate, async (req, res) => {
     const post = await Post.findById(req.params.id)
       .populate('userId', 'username profilePicture');
     if (!post) return res.status(404).json({ error: '投稿が見つかりません' });
+    if (isHiddenByModeration(post)) {
+      return res.status(404).json({ error: '投稿が見つかりません' });
+    }
 
     const viewerContext = await buildViewerVisibilityContext(req.user?._id);
     if (!canViewerSeePost(post, viewerContext)) {
@@ -759,6 +800,9 @@ router.post("/:id/comment", authenticate, async (req, res) => {
 
     const post = await Post.findById(req.params.id);
     if (!post) {
+      return res.status(404).json({ error: '投稿が見つかりません' });
+    }
+    if (isHiddenByModeration(post)) {
       return res.status(404).json({ error: '投稿が見つかりません' });
     }
 
@@ -857,6 +901,9 @@ router.get("/:id/comments", optionalAuthenticate, async (req, res) => {
     if (!post) {
       return res.status(404).json({ error: '投稿が見つかりません' });
     }
+    if (isHiddenByModeration(post)) {
+      return res.status(404).json({ error: '投稿が見つかりません' });
+    }
 
     const viewerContext = await buildViewerVisibilityContext(req.user?._id);
     if (!canViewerSeePost(post, viewerContext)) {
@@ -864,7 +911,10 @@ router.get("/:id/comments", optionalAuthenticate, async (req, res) => {
     }
 
     const mutedOwnerIds = Array.from(viewerContext?.mutedOwnerSet || []);
-    const commentQuery = { postId: req.params.id };
+    const commentQuery = {
+      postId: req.params.id,
+      moderationStatus: ACTIVE_CONTENT_STATUS,
+    };
     if (mutedOwnerIds.length > 0) {
       commentQuery.userId = { $nin: mutedOwnerIds };
     }
@@ -876,6 +926,142 @@ router.get("/:id/comments", optionalAuthenticate, async (req, res) => {
   } catch (err) {
     console.error('Get comments error:', err);
     res.status(500).json({ error: 'コメントの取得に失敗しました' });
+  }
+});
+
+router.post('/:id/report', authenticate, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id)
+      .select('userId moderationStatus moderationSummary visibility');
+    if (!post || isHiddenByModeration(post)) {
+      return res.status(404).json({ error: '投稿が見つかりません' });
+    }
+
+    const viewerContext = await buildViewerVisibilityContext(req.user._id);
+    if (!canViewerSeePost(post, viewerContext)) {
+      return res.status(403).json({ error: 'この投稿を通報する権限がありません' });
+    }
+
+    const reporterId = req.user._id;
+    const targetOwnerId = post.userId;
+    if (targetOwnerId.toString() === reporterId.toString()) {
+      return res.status(400).json({ error: '自分の投稿は通報できません' });
+    }
+
+    const reason = normalizeReportReason(req.body?.reason);
+    const details = normalizeReportDetails(req.body?.details);
+    const safetyActions = normalizeSafetyActions(req.body?.safetyActions);
+
+    const { duplicate } = await createModerationReport({
+      targetType: REPORT_TARGET_TYPES.POST,
+      targetId: post._id,
+      targetOwnerId,
+      reporterId,
+      reason,
+      details,
+      safetyActions,
+    });
+
+    if (duplicate) {
+      return res.status(409).json({ error: 'この投稿はすでに通報済みです' });
+    }
+
+    const appliedSafety = await applyReporterSafetyActions({
+      reporterId,
+      targetOwnerId,
+      safetyActions,
+    });
+
+    const reportCount = await countReportsForTarget(REPORT_TARGET_TYPES.POST, post._id);
+    const moderationState = await syncTargetModerationState({
+      targetDoc: post,
+      reportCount,
+    });
+
+    return res.status(201).json({
+      message: '投稿を通報しました',
+      reportCount: moderationState.reportCount,
+      hidden: moderationState.hidden,
+      threshold: moderationState.threshold,
+      appliedSafety,
+    });
+  } catch (err) {
+    console.error('Post report error:', err);
+    return res.status(500).json({ error: '投稿の通報に失敗しました' });
+  }
+});
+
+router.post('/:id/comment/:commentId/report', authenticate, async (req, res) => {
+  try {
+    const [post, comment] = await Promise.all([
+      Post.findById(req.params.id).select('userId moderationStatus moderationSummary visibility comment'),
+      Comment.findById(req.params.commentId).select('postId userId moderationStatus moderationSummary'),
+    ]);
+
+    if (!post || isHiddenByModeration(post)) {
+      return res.status(404).json({ error: '投稿が見つかりません' });
+    }
+    if (!comment || comment.postId.toString() !== req.params.id || isHiddenByModeration(comment)) {
+      return res.status(404).json({ error: 'コメントが見つかりません' });
+    }
+
+    const viewerContext = await buildViewerVisibilityContext(req.user._id);
+    if (!canViewerSeePost(post, viewerContext)) {
+      return res.status(403).json({ error: 'このコメントを通報する権限がありません' });
+    }
+
+    const reporterId = req.user._id;
+    const targetOwnerId = comment.userId;
+    if (targetOwnerId.toString() === reporterId.toString()) {
+      return res.status(400).json({ error: '自分のコメントは通報できません' });
+    }
+
+    const reason = normalizeReportReason(req.body?.reason);
+    const details = normalizeReportDetails(req.body?.details);
+    const safetyActions = normalizeSafetyActions(req.body?.safetyActions);
+
+    const { duplicate } = await createModerationReport({
+      targetType: REPORT_TARGET_TYPES.COMMENT,
+      targetId: comment._id,
+      targetOwnerId,
+      reporterId,
+      reason,
+      details,
+      safetyActions,
+    });
+
+    if (duplicate) {
+      return res.status(409).json({ error: 'このコメントはすでに通報済みです' });
+    }
+
+    const appliedSafety = await applyReporterSafetyActions({
+      reporterId,
+      targetOwnerId,
+      safetyActions,
+    });
+
+    const reportCount = await countReportsForTarget(REPORT_TARGET_TYPES.COMMENT, comment._id);
+    const moderationState = await syncTargetModerationState({
+      targetDoc: comment,
+      reportCount,
+    });
+
+    if (moderationState.hiddenNow) {
+      await Post.findByIdAndUpdate(post._id, {
+        $inc: { comment: -1 },
+      });
+    }
+
+    return res.status(201).json({
+      message: 'コメントを通報しました',
+      reportCount: moderationState.reportCount,
+      hidden: moderationState.hidden,
+      threshold: moderationState.threshold,
+      appliedSafety,
+    });
+  } catch (err) {
+    console.error('Comment report error:', err);
+    return res.status(500).json({ error: 'コメントの通報に失敗しました' });
   }
 });
 
