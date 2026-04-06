@@ -55,6 +55,24 @@ const MessageSchema = new mongoose.Schema(
         },
       },
     ],
+    // メッセージリアクション（ユーザーごとに1つの絵文字）
+    reactions: [
+      {
+        userId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        emoji: {
+          type: String,
+          required: true,
+        },
+        reactedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
     // 論理削除用
     deletedAt: {
       type: Date,

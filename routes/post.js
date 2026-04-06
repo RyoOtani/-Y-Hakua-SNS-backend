@@ -863,7 +863,13 @@ router.get("/:id/comments", optionalAuthenticate, async (req, res) => {
       return res.status(403).json({ error: 'この投稿を見る権限がありません' });
     }
 
-    const comments = await Comment.find({ postId: req.params.id })
+    const mutedOwnerIds = Array.from(viewerContext?.mutedOwnerSet || []);
+    const commentQuery = { postId: req.params.id };
+    if (mutedOwnerIds.length > 0) {
+      commentQuery.userId = { $nin: mutedOwnerIds };
+    }
+
+    const comments = await Comment.find(commentQuery)
       .populate("userId", "username profilePicture")
       .sort({ createdAt: 1 });
     res.status(200).json(comments);

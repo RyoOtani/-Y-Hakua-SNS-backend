@@ -152,6 +152,12 @@ const userSchema = new mongoose.Schema(
         ref: 'User',
       },
     ],
+    mutedUsers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
     hasAgreedToPrivacyPolicy: {
       type: Boolean,
       default: false,

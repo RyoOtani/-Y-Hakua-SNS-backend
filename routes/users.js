@@ -8,6 +8,46 @@ const { authenticate } = require("../middleware/auth");
 const { sendPushToUser } = require("../utils/pushNotification");
 const { getActiveLearningRankingBadge } = require('../utils/learningBadge');
 
+const normalizeObjectIdList = (input) => {
+  const values = Array.isArray(input) ? input : [input];
+  const uniq = new Set();
+
+  values.forEach((value) => {
+    if (value == null) return;
+
+    if (Array.isArray(value)) {
+      value.forEach((nested) => {
+        const normalized = typeof nested === 'string' ? nested : nested?.toString?.();
+        if (!normalized) return;
+        normalized
+          .split(',')
+          .map((token) => token.trim())
+          .filter(Boolean)
+          .forEach((token) => {
+            if (mongoose.Types.ObjectId.isValid(token)) {
+              uniq.add(token);
+            }
+          });
+      });
+      return;
+    }
+
+    const normalized = typeof value === 'string' ? value : value?.toString?.();
+    if (!normalized) return;
+    normalized
+      .split(',')
+      .map((token) => token.trim())
+      .filter(Boolean)
+      .forEach((token) => {
+        if (mongoose.Types.ObjectId.isValid(token)) {
+          uniq.add(token);
+        }
+      });
+  });
+
+  return Array.from(uniq);
+};
+
 // 機密フィールドを除外するヘルパー
 const sanitizeUser = (user) => {
   if (!user) return null;
@@ -20,7 +60,9 @@ const sanitizeUser = (user) => {
     blockedUsers,
     followers,
     following,
+    followings,
     closeFriends,
+    mutedUsers,
     email,
     notificationPreferences,
     notificationDeliveryMode,
@@ -35,11 +77,19 @@ const sanitizeUser = (user) => {
     ...safe
   } = obj;
 
+  const normalizedFollowers = normalizeObjectIdList(followers || []);
+  const normalizedFollowing = normalizeObjectIdList(
+    (Array.isArray(following) && following.length > 0)
+      ? following
+      : (followings || [])
+  );
+  const normalizedCloseFriends = normalizeObjectIdList(closeFriends || []);
+
   return {
     ...safe,
-    followersCount: Array.isArray(followers) ? followers.length : 0,
-    followingCount: Array.isArray(following) ? following.length : 0,
-    closeFriendsCount: Array.isArray(closeFriends) ? closeFriends.length : 0,
+    followersCount: normalizedFollowers.length,
+    followingCount: normalizedFollowing.length,
+    closeFriendsCount: normalizedCloseFriends.length,
     learningRankingBadge: getActiveLearningRankingBadge(learningRankingBadge),
   };
 };
@@ -391,6 +441,91 @@ router.put("/:id/unblock", authenticate, async (req, res) => {
   }
 });
 
+// mute a user
+router.put("/:id/mute", authenticate, async (req, res) => {
+  const currentUserId = req.user._id.toString();
+  const targetUserId = String(req.params.id || '');
+
+  if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
+    return res.status(400).json({ error: "無効なユーザーIDです" });
+  }
+  if (currentUserId === targetUserId) {
+    return res.status(400).json({ error: "自分自身をミュートすることはできません" });
+  }
+
+  try {
+    const [targetUser, currentUser] = await Promise.all([
+      User.findById(targetUserId).select('_id'),
+      User.findById(currentUserId).select('mutedUsers'),
+    ]);
+
+    if (!targetUser || !currentUser) {
+      return res.status(404).json({ error: "ユーザーが見つかりません" });
+    }
+
+    const mutedIds = normalizeObjectIdList(currentUser.mutedUsers || []);
+    if (mutedIds.includes(targetUserId)) {
+      return res.status(409).json({ error: "すでにこのユーザーをミュートしています" });
+    }
+
+    await User.findByIdAndUpdate(currentUserId, {
+      $addToSet: { mutedUsers: targetUserId },
+    });
+
+    return res.status(200).json({ message: "ユーザーをミュートしました" });
+  } catch (err) {
+    console.error('Mute user error:', err);
+    return res.status(500).json({ error: 'ミュート処理に失敗しました' });
+  }
+});
+
+// unmute a user
+router.put("/:id/unmute", authenticate, async (req, res) => {
+  const currentUserId = req.user._id.toString();
+  const targetUserId = String(req.params.id || '');
+
+  if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
+    return res.status(400).json({ error: "無効なユーザーIDです" });
+  }
+  if (currentUserId === targetUserId) {
+    return res.status(400).json({ error: "自分自身のミュート解除はできません" });
+  }
+
+  try {
+    const currentUser = await User.findById(currentUserId).select('_id mutedUsers');
+    if (!currentUser) {
+      return res.status(404).json({ error: "ユーザーが見つかりません" });
+    }
+
+    await User.findByIdAndUpdate(currentUserId, {
+      $pull: { mutedUsers: targetUserId },
+    });
+
+    return res.status(200).json({ message: "ユーザーのミュートを解除しました" });
+  } catch (err) {
+    console.error('Unmute user error:', err);
+    return res.status(500).json({ error: 'ミュート解除に失敗しました' });
+  }
+});
+
+// get muted user list
+router.get('/me/muted', authenticate, async (req, res) => {
+  try {
+    const currentUser = await User.findById(req.user._id)
+      .populate('mutedUsers', 'username profilePicture')
+      .select('mutedUsers');
+
+    if (!currentUser) {
+      return res.status(404).json({ error: 'ユーザーが見つかりません' });
+    }
+
+    return res.status(200).json(currentUser.mutedUsers || []);
+  } catch (err) {
+    console.error('Fetch muted users error:', err);
+    return res.status(500).json({ error: 'ミュート一覧の取得に失敗しました' });
+  }
+});
+
 // ユーザー検索API
 router.get("/search", async (req, res) => {
   const q = req.query.q?.trim();
@@ -593,7 +728,8 @@ router.get("/friends/:userId", async (req, res) => {
 
     // Try Redis first
     try {
-      followingIds = await redisClient.sMembers(`following:${userId}`);
+      const cachedIds = await redisClient.sMembers(`following:${userId}`);
+      followingIds = normalizeObjectIdList(cachedIds);
     } catch (redisErr) {
       console.error("Redis fetch error (friends):", redisErr);
     }
@@ -604,12 +740,16 @@ router.get("/friends/:userId", async (req, res) => {
       if (!user) {
         return res.status(404).json({ error: "ユーザーが見つかりません" });
       }
-      followingIds = user.following || [];
+      followingIds = normalizeObjectIdList(
+        (Array.isArray(user.following) && user.following.length > 0)
+          ? user.following
+          : (user.followings || [])
+      );
 
       // Seed Redis
       if (followingIds.length > 0) {
         try {
-          await redisClient.sAdd(`following:${userId}`, followingIds);
+          await redisClient.sAdd(`following:${userId}`, ...followingIds);
         } catch (seedErr) {
           console.error("Redis seed error (friends):", seedErr);
         }
@@ -620,19 +760,16 @@ router.get("/friends/:userId", async (req, res) => {
       return res.status(200).json([]);
     }
 
-    const friends = await Promise.all(
-      followingIds.map((friendId) => {
-        return User.findById(friendId);
-      })
-    );
+    const friends = await User.find({ _id: { $in: followingIds } })
+      .select('_id username profilePicture')
+      .lean();
 
-    let friendList = [];
-    friends.forEach((friend) => {
-      if (friend) {
-        const { _id, username, profilePicture } = friend;
-        friendList.push({ _id, username, profilePicture });
-      }
-    });
+    const friendList = friends.map((friend) => ({
+      _id: friend._id,
+      username: friend.username,
+      profilePicture: friend.profilePicture,
+    }));
+
     res.status(200).json(friendList);
   } catch (err) {
     console.error("Friends fetch error:", err);
@@ -648,7 +785,8 @@ router.get("/followers/:userId", async (req, res) => {
 
     // Try Redis first
     try {
-      followerIds = await redisClient.sMembers(`followers:${userId}`);
+      const cachedIds = await redisClient.sMembers(`followers:${userId}`);
+      followerIds = normalizeObjectIdList(cachedIds);
     } catch (redisErr) {
       console.error("Redis fetch error (followers):", redisErr);
     }
@@ -659,12 +797,12 @@ router.get("/followers/:userId", async (req, res) => {
       if (!user) {
         return res.status(404).json({ error: "ユーザーが見つかりません" });
       }
-      followerIds = user.followers || [];
+      followerIds = normalizeObjectIdList(user.followers || []);
 
       // Seed Redis
       if (followerIds.length > 0) {
         try {
-          await redisClient.sAdd(`followers:${userId}`, followerIds);
+          await redisClient.sAdd(`followers:${userId}`, ...followerIds);
         } catch (seedErr) {
           console.error("Redis seed error (followers):", seedErr);
         }
@@ -675,19 +813,16 @@ router.get("/followers/:userId", async (req, res) => {
       return res.status(200).json([]);
     }
 
-    const followers = await Promise.all(
-      followerIds.map((followerId) => {
-        return User.findById(followerId);
-      })
-    );
+    const followers = await User.find({ _id: { $in: followerIds } })
+      .select('_id username profilePicture')
+      .lean();
 
-    let followerList = [];
-    followers.forEach((follower) => {
-      if (follower) {
-        const { _id, username, profilePicture } = follower;
-        followerList.push({ _id, username, profilePicture });
-      }
-    });
+    const followerList = followers.map((follower) => ({
+      _id: follower._id,
+      username: follower.username,
+      profilePicture: follower.profilePicture,
+    }));
+
     res.status(200).json(followerList);
   } catch (err) {
     console.error("Followers fetch error:", err);

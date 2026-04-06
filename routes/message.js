@@ -33,6 +33,20 @@ const buildConversationLastMessageText = ({ text, attachments }) => {
   return "";
 };
 
+const ALLOWED_MESSAGE_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🎉", "👏", "🤔", "🔥"];
+
+const normalizeMessageReactions = (reactions = []) => {
+  if (!Array.isArray(reactions)) return [];
+
+  return reactions
+    .filter((reaction) => reaction?.userId && reaction?.emoji)
+    .map((reaction) => ({
+      userId: reaction.userId.toString(),
+      emoji: reaction.emoji,
+      reactedAt: reaction.reactedAt || null,
+    }));
+};
+
 // メッセージ追加
 router.post("/", authenticate, messageWriteLimiter, async (req, res) => {
   try {
@@ -183,6 +197,102 @@ router.get("/:conversationId", authenticate, async (req, res) => {
   } catch (err) {
     console.error("Message fetch error:", err);
     res.status(500).json({ error: "メッセージの取得に失敗しました" });
+  }
+});
+
+// メッセージリアクション追加/更新/解除
+// - グループチャット: 1ユーザー1リアクション（別絵文字を押すと上書き）
+// - 1対1チャット: 1ユーザー複数リアクション可（同じ絵文字はトグル）
+router.put("/:messageId/reaction", authenticate, messageWriteLimiter, async (req, res) => {
+  try {
+    const { emoji } = req.body;
+    const userId = req.user._id.toString();
+
+    if (!ALLOWED_MESSAGE_REACTIONS.includes(emoji)) {
+      return res.status(400).json({ error: "使用できないリアクションです" });
+    }
+
+    const message = await Message.findById(req.params.messageId);
+    if (!message || message.deletedAt) {
+      return res.status(404).json({ error: "メッセージが見つかりません" });
+    }
+
+    const conversation = await Conversation.findById(message.conversationId).select("members isGroup");
+    const hasAccess = conversation
+      ? conversation.members.map((memberId) => memberId.toString()).includes(userId)
+      : false;
+    if (!hasAccess) {
+      return res.status(403).json({ error: "この会話にアクセスする権限がありません" });
+    }
+
+    if (!Array.isArray(message.reactions)) {
+      message.reactions = [];
+    }
+
+    const isGroupConversation = Boolean(conversation?.isGroup);
+
+    if (isGroupConversation) {
+      const existingIndex = message.reactions.findIndex(
+        (reaction) => reaction?.userId?.toString() === userId
+      );
+
+      if (existingIndex >= 0) {
+        const existingReaction = message.reactions[existingIndex];
+        if (existingReaction.emoji === emoji) {
+          message.reactions.splice(existingIndex, 1);
+        } else {
+          message.reactions[existingIndex].emoji = emoji;
+          message.reactions[existingIndex].reactedAt = new Date();
+        }
+      } else {
+        message.reactions.push({
+          userId: req.user._id,
+          emoji,
+          reactedAt: new Date(),
+        });
+      }
+    } else {
+      const sameEmojiIndex = message.reactions.findIndex(
+        (reaction) =>
+          reaction?.userId?.toString() === userId &&
+          reaction?.emoji === emoji
+      );
+
+      if (sameEmojiIndex >= 0) {
+        message.reactions.splice(sameEmojiIndex, 1);
+      } else {
+        message.reactions.push({
+          userId: req.user._id,
+          emoji,
+          reactedAt: new Date(),
+        });
+      }
+    }
+
+    const updatedMessage = await message.save();
+    const reactions = normalizeMessageReactions(updatedMessage.reactions);
+
+    const io = req.app.get("io");
+    if (io && conversation) {
+      conversation.members
+        .map((memberId) => memberId.toString())
+        .filter((memberId) => memberId !== userId)
+        .forEach((memberId) => {
+          io.to(memberId).emit("messageReactionUpdated", {
+            conversationId: updatedMessage.conversationId.toString(),
+            messageId: updatedMessage._id.toString(),
+            reactions,
+          });
+        });
+    }
+
+    res.status(200).json({
+      messageId: updatedMessage._id,
+      reactions,
+    });
+  } catch (err) {
+    console.error("Message reaction update error:", err);
+    res.status(500).json({ error: "リアクションの更新に失敗しました" });
   }
 });
 

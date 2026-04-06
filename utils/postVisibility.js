@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const User = require('../models/User');
 
 const POST_VISIBILITY = Object.freeze({
@@ -17,6 +18,32 @@ const resolveOwnerId = (postDoc) => {
   return rawOwner.toString();
 };
 
+const toObjectId = (value) => {
+  if (!value) return null;
+  return mongoose.Types.ObjectId.isValid(value)
+    ? new mongoose.Types.ObjectId(value)
+    : null;
+};
+
+const toMatchIdValue = (value) => toObjectId(value) || value;
+
+const toMatchIdList = (ids = []) => {
+  const seen = new Set();
+  const matchValues = [];
+
+  ids.forEach((id) => {
+    if (!id) return;
+
+    const normalized = id.toString();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+
+    matchValues.push(toMatchIdValue(normalized));
+  });
+
+  return matchValues;
+};
+
 const buildViewerVisibilityContext = async (viewerId) => {
   const normalizedViewerId = viewerId ? viewerId.toString() : null;
 
@@ -24,15 +51,24 @@ const buildViewerVisibilityContext = async (viewerId) => {
     return {
       viewerId: null,
       allowedCloseFriendOwnerSet: new Set(),
+      mutedOwnerSet: new Set(),
     };
   }
 
-  const closeFriendOwners = await User.find({ closeFriends: normalizedViewerId }).select('_id');
+  const [viewerDoc, closeFriendOwners] = await Promise.all([
+    User.findById(normalizedViewerId).select('mutedUsers'),
+    User.find({ closeFriends: normalizedViewerId }).select('_id'),
+  ]);
 
   return {
     viewerId: normalizedViewerId,
     allowedCloseFriendOwnerSet: new Set(
       closeFriendOwners.map((owner) => owner._id.toString())
+    ),
+    mutedOwnerSet: new Set(
+      (viewerDoc?.mutedUsers || [])
+        .map((ownerId) => ownerId?.toString?.() || String(ownerId || ''))
+        .filter(Boolean)
     ),
   };
 };
@@ -48,14 +84,24 @@ const buildVisibilityQueryForViewer = (viewerContext) => {
     return query;
   }
 
-  query.$or.push({ userId: viewerContext.viewerId });
+  query.$or.push({ userId: toMatchIdValue(viewerContext.viewerId) });
 
   const allowedOwnerIds = Array.from(viewerContext.allowedCloseFriendOwnerSet || []);
-  if (allowedOwnerIds.length > 0) {
+  const allowedOwnerMatchIds = toMatchIdList(allowedOwnerIds);
+  if (allowedOwnerMatchIds.length > 0) {
     query.$or.push({
       visibility: POST_VISIBILITY.CLOSE_FRIENDS,
-      userId: { $in: allowedOwnerIds },
+      userId: { $in: allowedOwnerMatchIds },
     });
+  }
+
+  const mutedOwnerIds = Array.from(viewerContext.mutedOwnerSet || [])
+    .filter((ownerId) => ownerId && ownerId !== viewerContext.viewerId);
+  const mutedOwnerMatchIds = toMatchIdList(mutedOwnerIds);
+  if (mutedOwnerMatchIds.length > 0) {
+    query.$and = [
+      { userId: { $nin: mutedOwnerMatchIds } },
+    ];
   }
 
   return query;
@@ -70,6 +116,10 @@ const canViewerSeePost = (postDoc, viewerContext) => {
   const viewerId = viewerContext?.viewerId || null;
   if (viewerId && ownerId === viewerId) {
     return true;
+  }
+
+  if (viewerContext?.mutedOwnerSet?.has(ownerId)) {
+    return false;
   }
 
   const visibility = normalizePostVisibility(postDoc.visibility);
