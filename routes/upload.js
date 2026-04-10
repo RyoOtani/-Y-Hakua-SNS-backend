@@ -5,13 +5,14 @@ const sharp = require("sharp");
 const { Readable } = require("stream");
 const dotenv = require("dotenv");
 const rateLimit = require("express-rate-limit");
+const { ipKeyGenerator } = require("express-rate-limit");
 const { authenticate } = require("../middleware/auth");
 
 dotenv.config();
 
 const normalizeRateLimitKey = (req) => {
-  const ip = String(req.ip || req.socket?.remoteAddress || "");
-  return ip.replace(/^::ffff:/, "");
+  const ip = req.ip || req.socket?.remoteAddress || "";
+  return ipKeyGenerator(ip);
 };
 
 // Cloudinary Configuration

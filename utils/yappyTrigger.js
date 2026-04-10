@@ -1,4 +1,4 @@
-const YAPPY_TRIGGER_PATTERN = /[#＃]\s*[@＠]\s*yappy\b/i;
+const YAPPY_TRIGGER_PATTERN = /[#＃]\s*[@＠]?\s*yappy\b/i;
 
 const shouldTriggerYappyReply = (text) => {
   const normalized = String(text || '');

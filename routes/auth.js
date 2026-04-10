@@ -3,6 +3,7 @@ const passport = require('passport');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 const jwksClient = require('jwks-rsa');
 const router = express.Router();
 const User = require("../models/User");
@@ -16,8 +17,8 @@ const appleJwksClient = jwksClient({
 });
 
 const normalizeRateLimitKey = (req) => {
-  const ip = String(req.ip || req.socket?.remoteAddress || '');
-  return ip.replace(/^::ffff:/, '');
+  const ip = req.ip || req.socket?.remoteAddress || '';
+  return ipKeyGenerator(ip);
 };
 
 // ログイン・登録用レート制限

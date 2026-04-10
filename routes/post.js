@@ -30,8 +30,8 @@ const {
 } = require("../utils/postVisibility");
 
 const ACTIVE_CONTENT_STATUS = { $ne: "hidden_by_reports" };
-const DEFAULT_YAPPY_DISABLED_REPLY = "いまAIサービスが停止中なので、少し時間を置いてからもう一度 #@Yappy で呼んでね。";
-const DEFAULT_YAPPY_ERROR_REPLY = "返信の作成に失敗したよ。少し時間を置いてからもう一度 #@Yappy で呼んでね。";
+const DEFAULT_YAPPY_DISABLED_REPLY = "いまAIサービスが停止中なので、少し時間を置いてからもう一度 #Yappy で呼んでね。";
+const DEFAULT_YAPPY_ERROR_REPLY = "返信の作成に失敗したよ。少し時間を置いてからもう一度 #Yappy で呼んでね。";
 
 const isNotificationEnabled = (userDoc, key) => {
   const prefs = userDoc?.notificationPreferences;
@@ -91,7 +91,7 @@ const buildYappyReplyText = async ({ postAuthorUsername, postText }) => {
         {
           role: 'user',
           content: [
-            '#@Yappyで呼ばれました。次の投稿へ自然に返信してください。',
+            '#Yappyで呼ばれました。次の投稿へ自然に返信してください。',
             `投稿者: ${String(postAuthorUsername || 'ユーザー')}`,
             `投稿本文: ${String(postText || '').trim() || '(本文なし)'}`,
           ].join('\n'),

@@ -3,13 +3,14 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const jwksClient = require('jwks-rsa');
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = require('express-rate-limit');
 const User = require('../models/User');
 const { authenticate, optionalAuthenticate } = require('../middleware/auth');
 const { recordClientEvent, getObservabilitySummary } = require('../utils/observability');
 
 const normalizeRateLimitKey = (req) => {
-        const ip = String(req.ip || req.socket?.remoteAddress || '');
-        return ip.replace(/^::ffff:/, '');
+    const ip = req.ip || req.socket?.remoteAddress || '';
+    return ipKeyGenerator(ip);
 };
 
 const riscLimiter = rateLimit({

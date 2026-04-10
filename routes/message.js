@@ -1,5 +1,6 @@
 const router = require("express").Router();
 const rateLimit = require("express-rate-limit");
+const { ipKeyGenerator } = require("express-rate-limit");
 const Message = require("../models/Message");
 const Conversation = require("../models/Conversation");
 const User = require("../models/User");
@@ -18,8 +19,8 @@ const {
 } = require("../utils/moderation");
 
 const normalizeRateLimitKey = (req) => {
-  const ip = String(req.ip || req.socket?.remoteAddress || "");
-  return ip.replace(/^::ffff:/, "");
+  const ip = req.ip || req.socket?.remoteAddress || "";
+  return ipKeyGenerator(ip);
 };
 
 const messageWriteLimiter = rateLimit({
