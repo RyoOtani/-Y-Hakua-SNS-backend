@@ -112,6 +112,42 @@ const buildYappyReplyText = async ({ postAuthorUsername, postText }) => {
   }
 };
 
+const buildYappyReplyToCommentText = async ({ commentAuthorUsername, commentText }) => {
+  if (!isAiServiceEnabled()) {
+    return DEFAULT_YAPPY_DISABLED_REPLY;
+  }
+
+  try {
+    const completion = await callGroqChatCompletion({
+      messages: [
+        {
+          role: 'system',
+          content: 'あなたはYappyというSNSアシスタントです。コメントへの返信として、やさしく簡潔に日本語で1-3文で回答してください。危険・違法行為は助長せず安全に回答してください。',
+        },
+        {
+          role: 'user',
+          content: [
+            '#Yappyでコメントから呼ばれました。次のコメントへ自然に返信してください。',
+            `コメント投稿者: ${String(commentAuthorUsername || 'ユーザー')}`,
+            `コメント本文: ${String(commentText || '').trim() || '(本文なし)'}`,
+          ].join('\n'),
+        },
+      ],
+      temperature: 0.4,
+      maxTokens: 220,
+    });
+
+    const reply = String(completion?.content || '').trim();
+    if (!reply) {
+      return DEFAULT_YAPPY_ERROR_REPLY;
+    }
+    return reply.slice(0, 500);
+  } catch (err) {
+    console.error('[yappy] Groq comment reply generation failed:', err);
+    return DEFAULT_YAPPY_ERROR_REPLY;
+  }
+};
+
 const postYappyAutoReply = async ({ post, postText, postAuthorUsername, app }) => {
   if (!shouldTriggerYappyReply(postText)) {
     return;
@@ -197,6 +233,105 @@ const postYappyAutoReply = async ({ post, postText, postAuthorUsername, app }) =
     },
   }).catch((pushErr) => {
     console.error('[yappy] FCM notify error:', pushErr);
+  });
+};
+
+const postYappyAutoReplyToComment = async ({
+  post,
+  sourceComment,
+  sourceCommentText,
+  sourceCommentAuthorUsername,
+  app,
+}) => {
+  if (!shouldTriggerYappyReply(sourceCommentText)) {
+    return;
+  }
+
+  const yappyUser = await resolveYappyBotUser();
+  if (!yappyUser) {
+    console.warn('[yappy] bot user is not configured. Set YAPPY_BOT_USER_ID or YAPPY_BOT_USERNAME.');
+    return;
+  }
+
+  const sourceCommentAuthorId = sourceComment?.userId?.toString?.() || String(sourceComment?.userId || '');
+  if (!sourceCommentAuthorId) return;
+  if (sourceCommentAuthorId === yappyUser._id.toString()) {
+    return;
+  }
+
+  const rawReply = await buildYappyReplyToCommentText({
+    commentAuthorUsername: sourceCommentAuthorUsername,
+    commentText: sourceCommentText,
+  });
+
+  const mention = sourceCommentAuthorUsername ? `@${sourceCommentAuthorUsername} ` : '';
+  const filteredReply = censorText(String(rawReply || '')).trim();
+  const baseReply = filteredReply || DEFAULT_YAPPY_ERROR_REPLY;
+  const finalReply = `${mention}${baseReply}`.trim().slice(0, 500);
+
+  const newComment = new Comment({
+    postId: post._id,
+    userId: yappyUser._id,
+    desc: finalReply,
+  });
+  await newComment.save();
+
+  await Post.findByIdAndUpdate(post._id, {
+    $inc: { comment: 1 },
+  });
+
+  const receiverUser = await User.findById(sourceCommentAuthorId).select('notificationPreferences');
+  if (!isNotificationEnabled(receiverUser, 'comment')) {
+    return;
+  }
+
+  const notification = new Notification({
+    sender: yappyUser._id,
+    receiver: sourceCommentAuthorId,
+    type: 'comment',
+    post: post._id,
+  });
+  const savedNotification = await notification.save();
+
+  try {
+    const notificationData = {
+      _id: savedNotification._id,
+      sender: {
+        _id: yappyUser._id,
+        username: yappyUser.username,
+        profilePicture: yappyUser.profilePicture,
+      },
+      receiver: sourceCommentAuthorId,
+      type: 'comment',
+      post: post._id,
+      createdAt: savedNotification.createdAt,
+      isRead: false,
+    };
+    await redisClient.lPush(`notifications:${sourceCommentAuthorId}`, JSON.stringify(notificationData));
+    await redisClient.lTrim(`notifications:${sourceCommentAuthorId}`, 0, 49);
+  } catch (redisErr) {
+    console.error('[yappy] Redis notification sync error (comment reply):', redisErr);
+  }
+
+  const io = app.get('io');
+  io.to(sourceCommentAuthorId).emit('getNotification', {
+    senderId: yappyUser._id,
+    senderName: yappyUser.username || 'Yappy',
+    type: 'comment',
+    postId: post._id,
+  });
+
+  sendPushToUser({
+    receiverId: sourceCommentAuthorId,
+    title: 'Yappyから返信',
+    body: `${yappyUser.username || 'Yappy'} さんがあなたのコメントに返信しました`,
+    data: {
+      type: 'comment',
+      postId: post._id,
+      senderId: yappyUser._id,
+    },
+  }).catch((pushErr) => {
+    console.error('[yappy] FCM notify error (comment reply):', pushErr);
   });
 };
 
@@ -1017,63 +1152,71 @@ router.post("/:id/comment", authenticate, async (req, res) => {
     // 通知作成 & 送信 (自分の投稿以外)
     if (post.userId.toString() !== userId.toString()) {
       const receiverUser = await User.findById(post.userId).select('notificationPreferences');
-      if (!isNotificationEnabled(receiverUser, 'comment')) {
-        return res.status(200).json(savedComment);
-      }
-
-      const notification = new Notification({
-        sender: userId,
-        receiver: post.userId,
-        type: "comment",
-        post: post._id,
-      });
-      const savedNotification = await notification.save();
-
-      // Redis sync
-      try {
-        const sender = await User.findById(userId);
-        const notificationData = {
-          _id: savedNotification._id,
-          sender: {
-            _id: sender._id,
-            username: sender.username,
-            profilePicture: sender.profilePicture
-          },
+      if (isNotificationEnabled(receiverUser, 'comment')) {
+        const notification = new Notification({
+          sender: userId,
           receiver: post.userId,
           type: "comment",
           post: post._id,
-          createdAt: savedNotification.createdAt,
-          isRead: false
-        };
-        await redisClient.lPush(`notifications:${post.userId}`, JSON.stringify(notificationData));
-        await redisClient.lTrim(`notifications:${post.userId}`, 0, 49);
-      } catch (redisErr) {
-        console.error("Redis notification sync error (comment):", redisErr);
-      }
+        });
+        const savedNotification = await notification.save();
 
-      const io = req.app.get('io');
-      const sender = await User.findById(userId);
+        // Redis sync
+        try {
+          const sender = await User.findById(userId);
+          const notificationData = {
+            _id: savedNotification._id,
+            sender: {
+              _id: sender._id,
+              username: sender.username,
+              profilePicture: sender.profilePicture
+            },
+            receiver: post.userId,
+            type: "comment",
+            post: post._id,
+            createdAt: savedNotification.createdAt,
+            isRead: false
+          };
+          await redisClient.lPush(`notifications:${post.userId}`, JSON.stringify(notificationData));
+          await redisClient.lTrim(`notifications:${post.userId}`, 0, 49);
+        } catch (redisErr) {
+          console.error("Redis notification sync error (comment):", redisErr);
+        }
 
-      io.to(post.userId.toString()).emit("getNotification", {
-        senderId: userId,
-        senderName: sender.username,
-        type: "comment",
-        postId: post._id,
-      });
+        const io = req.app.get('io');
+        const sender = await User.findById(userId);
 
-      sendPushToUser({
-        receiverId: post.userId,
-        title: '新しいコメント',
-        body: `${sender.username} さんがあなたの投稿にコメントしました`,
-        data: {
-          type: 'comment',
-          postId: post._id,
+        io.to(post.userId.toString()).emit("getNotification", {
           senderId: userId,
-        },
-      }).catch((pushErr) => {
-        console.error('FCM notify error (comment):', pushErr);
-      });
+          senderName: sender.username,
+          type: "comment",
+          postId: post._id,
+        });
+
+        sendPushToUser({
+          receiverId: post.userId,
+          title: '新しいコメント',
+          body: `${sender.username} さんがあなたの投稿にコメントしました`,
+          data: {
+            type: 'comment',
+            postId: post._id,
+            senderId: userId,
+          },
+        }).catch((pushErr) => {
+          console.error('FCM notify error (comment):', pushErr);
+        });
+      }
     }
+
+    void postYappyAutoReplyToComment({
+      post,
+      sourceComment: savedComment,
+      sourceCommentText: filteredCommentDesc,
+      sourceCommentAuthorUsername: req.user?.username,
+      app: req.app,
+    }).catch((yappyErr) => {
+      console.error('[yappy] auto reply to comment error:', yappyErr);
+    });
 
     return res.status(200).json(savedComment);
   } catch (err) {
