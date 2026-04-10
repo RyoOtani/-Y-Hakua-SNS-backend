@@ -14,6 +14,7 @@ const { Server } = require("socket.io");
 const redisClient = require('./redisClient');
 const User = require('./models/User');
 const Conversation = require('./models/Conversation');
+const { isAppEmailAllowed } = require('./utils/appEmailAllowlist');
 const { initializeFirebaseAdmin } = require('./utils/firebaseAdmin');
 const { startBatchedNotificationScheduler } = require('./utils/pushNotification');
 const { startWeeklyLearningBadgeScheduler } = require('./utils/learningBadge');
@@ -88,7 +89,7 @@ const extractSocketToken = (socket) => {
   return null;
 };
 
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   const token = extractSocketToken(socket);
   if (!token) {
     return next(new Error('Unauthorized: token missing'));
@@ -103,6 +104,20 @@ io.use((socket, next) => {
     const userId = decoded?.id ? String(decoded.id) : null;
     if (!userId) {
       return next(new Error('Unauthorized: invalid token payload'));
+    }
+
+    const user = await User.findById(userId).select('email');
+    if (!user) {
+      return next(new Error('Unauthorized: user not found'));
+    }
+
+    if (!isAppEmailAllowed(user.email)) {
+      console.warn('[socket] allowlist denied', {
+        userId,
+        email: user.email || null,
+        at: new Date().toISOString(),
+      });
+      return next(new Error('Unauthorized: email not allowlisted'));
     }
 
     socket.data.userId = userId;
@@ -474,6 +489,7 @@ app.use('/api/hashtags', require('./routes/hashtag'));
 app.use('/api/security', require('./routes/security'));
 app.use('/api/learning', require('./routes/learning'));
 app.use('/api/notes', require('./routes/notes'));
+app.use('/api/ai', require('./routes/ai'));
 
 // サーバー起動
 const PORT = process.env.PORT || 8800;

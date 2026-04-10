@@ -158,6 +158,15 @@ const userSchema = new mongoose.Schema(
         ref: 'User',
       },
     ],
+    hasElevatedAccess: {
+      type: Boolean,
+      default: false,
+    },
+    elevatedAccessSource: {
+      type: String,
+      enum: ['email_exact_match', null],
+      default: null,
+    },
     hasAgreedToPrivacyPolicy: {
       type: Boolean,
       default: false,

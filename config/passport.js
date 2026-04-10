@@ -97,6 +97,7 @@ const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const User = require('../models/User');
 const { encrypt } = require('../utils/crypto');
+const { isAppEmailAllowed } = require('../utils/appEmailAllowlist');
 
 passport.use(
   new GoogleStrategy(
@@ -123,6 +124,13 @@ passport.use(
       try {
         const email = profile.emails[0].value;
         const displayName = profile.displayName || email.split('@')[0];
+
+        if (!isAppEmailAllowed(email)) {
+          return done(null, false, {
+            message: 'allowlist_denied',
+            email,
+          });
+        }
 
         // 1. まずgoogleIdで検索
         let user = await User.findOne({ googleId: profile.id });
@@ -226,9 +234,18 @@ passport.use(
   new JwtStrategy(jwtOptions, async (jwt_payload, done) => {
     try {
       const user = await User.findById(jwt_payload.id);
-      if (user) {
+      if (user && isAppEmailAllowed(user.email)) {
         return done(null, user);
       }
+
+      if (user && !isAppEmailAllowed(user.email)) {
+        console.warn('[JWT] allowlist denied', {
+          userId: user._id ? String(user._id) : null,
+          email: user.email || null,
+          at: new Date().toISOString(),
+        });
+      }
+
       return done(null, false);
     } catch (error) {
       return done(error, false);

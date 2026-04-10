@@ -8,6 +8,9 @@ const redisClient = require("../redisClient");
 const { authenticate, optionalAuthenticate } = require("../middleware/auth");
 const { sendPushToUser } = require("../utils/pushNotification");
 const { censorText } = require("../utils/contentFilter");
+const { callGroqChatCompletion } = require("../utils/groqClient");
+const { isAiServiceEnabled } = require("../utils/aiServiceControl");
+const { shouldTriggerYappyReply } = require("../utils/yappyTrigger");
 const {
   REPORT_TARGET_TYPES,
   normalizeReportReason,
@@ -27,6 +30,8 @@ const {
 } = require("../utils/postVisibility");
 
 const ACTIVE_CONTENT_STATUS = { $ne: "hidden_by_reports" };
+const DEFAULT_YAPPY_DISABLED_REPLY = "いまAIサービスが停止中なので、少し時間を置いてからもう一度 #@Yappy で呼んでね。";
+const DEFAULT_YAPPY_ERROR_REPLY = "返信の作成に失敗したよ。少し時間を置いてからもう一度 #@Yappy で呼んでね。";
 
 const isNotificationEnabled = (userDoc, key) => {
   const prefs = userDoc?.notificationPreferences;
@@ -53,6 +58,147 @@ const hasCloseFriends = async (userId) => {
 };
 
 const isHiddenByModeration = (doc) => doc?.moderationStatus === 'hidden_by_reports';
+
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const resolveYappyBotUser = async () => {
+  const configuredBotId = String(process.env.YAPPY_BOT_USER_ID || '').trim();
+  if (configuredBotId) {
+    const byId = await User.findById(configuredBotId).select('_id username profilePicture');
+    if (byId) return byId;
+    console.warn('[yappy] YAPPY_BOT_USER_ID is set but no user was found');
+  }
+
+  const configuredBotUsername = String(process.env.YAPPY_BOT_USERNAME || 'Yappy').trim();
+  if (!configuredBotUsername) return null;
+
+  const usernamePattern = new RegExp(`^${escapeRegExp(configuredBotUsername)}$`, 'i');
+  return User.findOne({ username: usernamePattern }).select('_id username profilePicture');
+};
+
+const buildYappyReplyText = async ({ postAuthorUsername, postText }) => {
+  if (!isAiServiceEnabled()) {
+    return DEFAULT_YAPPY_DISABLED_REPLY;
+  }
+
+  try {
+    const completion = await callGroqChatCompletion({
+      messages: [
+        {
+          role: 'system',
+          content: 'あなたはYappyというSNSアシスタントです。友好的で短く、投稿内容に沿った返信を日本語で1-3文で返してください。危険・違法行為は助長せず安全に回答してください。',
+        },
+        {
+          role: 'user',
+          content: [
+            '#@Yappyで呼ばれました。次の投稿へ自然に返信してください。',
+            `投稿者: ${String(postAuthorUsername || 'ユーザー')}`,
+            `投稿本文: ${String(postText || '').trim() || '(本文なし)'}`,
+          ].join('\n'),
+        },
+      ],
+      temperature: 0.4,
+      maxTokens: 220,
+    });
+
+    const reply = String(completion?.content || '').trim();
+    if (!reply) {
+      return DEFAULT_YAPPY_ERROR_REPLY;
+    }
+    return reply.slice(0, 500);
+  } catch (err) {
+    console.error('[yappy] Groq reply generation failed:', err);
+    return DEFAULT_YAPPY_ERROR_REPLY;
+  }
+};
+
+const postYappyAutoReply = async ({ post, postText, postAuthorUsername, app }) => {
+  if (!shouldTriggerYappyReply(postText)) {
+    return;
+  }
+
+  const yappyUser = await resolveYappyBotUser();
+  if (!yappyUser) {
+    console.warn('[yappy] bot user is not configured. Set YAPPY_BOT_USER_ID or YAPPY_BOT_USERNAME.');
+    return;
+  }
+
+  const rawReply = await buildYappyReplyText({
+    postAuthorUsername,
+    postText,
+  });
+  const filteredReply = censorText(String(rawReply || '')).trim().slice(0, 500);
+  const finalReply = filteredReply || DEFAULT_YAPPY_ERROR_REPLY;
+
+  const newComment = new Comment({
+    postId: post._id,
+    userId: yappyUser._id,
+    desc: finalReply,
+  });
+  await newComment.save();
+
+  await Post.findByIdAndUpdate(post._id, {
+    $inc: { comment: 1 },
+  });
+
+  if (post.userId.toString() === yappyUser._id.toString()) {
+    return;
+  }
+
+  const receiverUser = await User.findById(post.userId).select('notificationPreferences');
+  if (!isNotificationEnabled(receiverUser, 'comment')) {
+    return;
+  }
+
+  const notification = new Notification({
+    sender: yappyUser._id,
+    receiver: post.userId,
+    type: 'comment',
+    post: post._id,
+  });
+  const savedNotification = await notification.save();
+
+  try {
+    const notificationData = {
+      _id: savedNotification._id,
+      sender: {
+        _id: yappyUser._id,
+        username: yappyUser.username,
+        profilePicture: yappyUser.profilePicture,
+      },
+      receiver: post.userId,
+      type: 'comment',
+      post: post._id,
+      createdAt: savedNotification.createdAt,
+      isRead: false,
+    };
+    await redisClient.lPush(`notifications:${post.userId}`, JSON.stringify(notificationData));
+    await redisClient.lTrim(`notifications:${post.userId}`, 0, 49);
+  } catch (redisErr) {
+    console.error('[yappy] Redis notification sync error:', redisErr);
+  }
+
+  const io = app.get('io');
+  io.to(post.userId.toString()).emit('getNotification', {
+    senderId: yappyUser._id,
+    senderName: yappyUser.username || 'Yappy',
+    type: 'comment',
+    postId: post._id,
+  });
+
+  sendPushToUser({
+    receiverId: post.userId,
+    title: 'Yappyから返信',
+    body: `${yappyUser.username || 'Yappy'} さんがあなたの投稿に返信しました`,
+    data: {
+      type: 'comment',
+      postId: post._id,
+      senderId: yappyUser._id,
+    },
+  }).catch((pushErr) => {
+    console.error('[yappy] FCM notify error:', pushErr);
+  });
+};
 
 //create a post
 router.post("/", authenticate, async (req, res) => {
@@ -133,6 +279,15 @@ router.post("/", authenticate, async (req, res) => {
         )
       );
     }
+
+    void postYappyAutoReply({
+      post: savedPost,
+      postText: filteredDesc,
+      postAuthorUsername: user?.username,
+      app: req.app,
+    }).catch((yappyErr) => {
+      console.error('[yappy] auto reply error:', yappyErr);
+    });
 
     return res.status(200).json(populatedPost);
   } catch (err) {
@@ -455,6 +610,8 @@ router.get("/timeline/all", optionalAuthenticate, async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = Math.min(parseInt(req.query.limit) || 10, 50);
     const skip = (page - 1) * limit;
+    const isForYouFeedRequest = String(req.query.feedType || '').toLowerCase() === 'foryou';
+    const announcementWindowStart = new Date(Date.now() - (24 * 60 * 60 * 1000));
     const viewerContext = await buildViewerVisibilityContext(req.user?._id);
     const visibilityFilter = buildVisibilityQueryForViewer(viewerContext);
     const postMatchFilter = {
@@ -462,42 +619,73 @@ router.get("/timeline/all", optionalAuthenticate, async (req, res) => {
       moderationStatus: ACTIVE_CONTENT_STATUS,
     };
 
-    const allPosts = await Post.aggregate([
-      { $match: postMatchFilter },
-      { $sort: { createdAt: -1 } },
-      { $skip: skip },
-      { $limit: limit },
-      {
-        $lookup: {
-          from: "users",
-          localField: "userId",
-          foreignField: "_id",
-          as: "userInfo"
-        }
-      },
-      { $unwind: "$userInfo" },
-      {
-        $project: {
-          desc: 1,
-          img: 1,
-          imgs: 1,
-          video: 1,
-          likes: 1,
-          reposts: 1,
-          viewCount: 1,
-          comment: 1,
-          visibility: 1,
-          isClassroom: 1,
-          createdAt: 1,
-          updatedAt: 1,
-          userId: {
-            _id: "$userInfo._id",
-            username: "$userInfo.username",
-            profilePicture: "$userInfo.profilePicture"
-          }
+    const userLookupStage = {
+      $lookup: {
+        from: "users",
+        localField: "userId",
+        foreignField: "_id",
+        as: "userInfo"
+      }
+    };
+    const userUnwindStage = { $unwind: "$userInfo" };
+    const projectStage = {
+      $project: {
+        desc: 1,
+        img: 1,
+        imgs: 1,
+        video: 1,
+        likes: 1,
+        reposts: 1,
+        viewCount: 1,
+        comment: 1,
+        visibility: 1,
+        isClassroom: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        announcementBoostActive: { $ifNull: ["$announcementBoostActive", false] },
+        userId: {
+          _id: "$userInfo._id",
+          username: "$userInfo.username",
+          profilePicture: "$userInfo.profilePicture",
+          hasElevatedAccess: { $ifNull: ["$userInfo.hasElevatedAccess", false] }
         }
       }
-    ]);
+    };
+
+    const timelinePipeline = [{ $match: postMatchFilter }];
+
+    if (isForYouFeedRequest) {
+      timelinePipeline.push(
+        userLookupStage,
+        userUnwindStage,
+        {
+          $addFields: {
+            announcementBoostActive: {
+              $and: [
+                { $eq: ["$userInfo.hasElevatedAccess", true] },
+                { $gte: ["$createdAt", announcementWindowStart] },
+              ],
+            },
+          },
+        },
+        { $sort: { announcementBoostActive: -1, createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        projectStage,
+      );
+    } else {
+      timelinePipeline.push(
+        { $sort: { createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        userLookupStage,
+        userUnwindStage,
+        { $addFields: { announcementBoostActive: false } },
+        projectStage,
+      );
+    }
+
+    const allPosts = await Post.aggregate(timelinePipeline);
     return res.status(200).json(allPosts);
   } catch (err) {
     console.error("Error in /timeline/all:", err);

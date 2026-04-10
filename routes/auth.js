@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 const jwksClient = require('jwks-rsa');
 const router = express.Router();
 const User = require("../models/User");
+const { isAppEmailAllowed } = require('../utils/appEmailAllowlist');
 
 // Apple JWKS client for verifying Sign in with Apple tokens
 const appleJwksClient = jwksClient({
@@ -61,6 +62,57 @@ const logLoginSuccess = ({ method, user, extra = {} }) => {
   });
 };
 
+const APP_EMAIL_DENIED_MESSAGE = 'このメールアドレスは利用を許可されていません';
+
+const logAllowlistDenied = ({ method, email }) => {
+  console.warn(`[Auth] allowlist denied method=${method}`, {
+    email: normalizeEmail(email),
+    at: new Date().toISOString(),
+  });
+};
+
+const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+
+const PRIVILEGED_EMAIL_ALLOWLIST = new Set(
+  String(process.env.PRIVILEGED_EMAIL_ALLOWLIST || '')
+    .split(',')
+    .map((email) => normalizeEmail(email))
+    .filter(Boolean)
+);
+
+const isPrivilegedEmail = (email) => {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return false;
+  return PRIVILEGED_EMAIL_ALLOWLIST.has(normalized);
+};
+
+const syncElevatedAccessByEmailAllowlist = async (user) => {
+  if (!user) return user;
+
+  const shouldHaveElevatedAccess = isPrivilegedEmail(user.email);
+  const previousState = Boolean(user.hasElevatedAccess);
+
+  if (previousState === shouldHaveElevatedAccess) {
+    return user;
+  }
+
+  user.hasElevatedAccess = shouldHaveElevatedAccess;
+  user.elevatedAccessSource = shouldHaveElevatedAccess ? 'email_exact_match' : null;
+  await user.save();
+
+  const username = getUsernameForLog(user);
+  console.log(
+    `[Auth] elevated access ${shouldHaveElevatedAccess ? 'granted' : 'revoked'} username： ${username}`,
+    {
+      email: user.email,
+      source: 'email_exact_match',
+      at: new Date().toISOString(),
+    }
+  );
+
+  return user;
+};
+
 //ユーザー登録
 router.post("/register", authLimiter, async (req, res) => {
   try {
@@ -79,15 +131,22 @@ router.post("/register", authLimiter, async (req, res) => {
     if (username.length < 2 || username.length > 30) {
       return res.status(400).json({ error: 'ユーザー名は2〜30文字にしてください' });
     }
+    if (!isAppEmailAllowed(email)) {
+      logAllowlistDenied({ method: 'register', email });
+      return res.status(403).json({ error: APP_EMAIL_DENIED_MESSAGE });
+    }
 
     // パスワードをハッシュ化
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
+    const allowlisted = isPrivilegedEmail(email);
 
     const newUser = new User({
       username,
       email,
       password: hashedPassword,
+      hasElevatedAccess: allowlisted,
+      elevatedAccessSource: allowlisted ? 'email_exact_match' : null,
     });
     const user = await newUser.save();
     const { password: _, ...userWithoutPassword } = user._doc;
@@ -114,6 +173,10 @@ router.post("/login", authLimiter, async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) return authFailed();
+    if (!isAppEmailAllowed(user.email || email)) {
+      logAllowlistDenied({ method: 'password', email: user.email || email });
+      return res.status(403).json({ error: APP_EMAIL_DENIED_MESSAGE });
+    }
 
     // パスワードがない（Google認証ユーザー）
     if (!user.password) {
@@ -135,6 +198,8 @@ router.post("/login", authLimiter, async (req, res) => {
 
     // ブラウザ向けの安全なCookieにも保存（Bearer互換は維持）
     res.cookie(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS);
+
+    await syncElevatedAccessByEmailAllowlist(user);
 
     logLoginSuccess({ method: 'password', user });
 
@@ -196,44 +261,59 @@ router.get(
   },
   (req, res, next) => {
     passport.authenticate('google', (err, user, info) => {
+      const frontendUrl = process.env.FRONTEND_URL || '';
+
+      if (!err && !user && info?.message === 'allowlist_denied') {
+        logAllowlistDenied({ method: 'google', email: info?.email });
+        return res.redirect(`${frontendUrl}/login?error=allowlist_denied`);
+      }
+
       if (err || !user) {
         console.error('[OAuth Callback] Authentication failed:', err || info);
-        return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=auth_failed`);
+        return res.redirect(`${frontendUrl}/login?error=auth_failed`);
       }
       req.logIn(user, (loginErr) => {
         if (loginErr) {
           console.error('[OAuth Callback] Session login failed:', loginErr);
-          return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=auth_failed`);
+          return res.redirect(`${frontendUrl}/login?error=auth_failed`);
         }
         next();
       });
     })(req, res, next);
   },
-  (req, res) => {
-    logLoginSuccess({
-      method: 'google',
-      user: req.user,
-      extra: { platform: req._oauthPlatform || 'web' },
-    });
-
-    // JWTトークンを生成
-    const token = jwt.sign(
-      { id: req.user._id, email: req.user.email },
-      JWT_SECRET,
-      {
-        expiresIn: '7d',
-        issuer: JWT_ISSUER,
-        audience: JWT_AUDIENCE,
+  async (req, res) => {
+    try {
+      if (!isAppEmailAllowed(req.user?.email)) {
+        logAllowlistDenied({ method: 'google', email: req.user?.email });
+        return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=allowlist_denied`);
       }
-    );
 
-    // Web: HttpOnly Cookieで返す
-    res.cookie(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS);
+      await syncElevatedAccessByEmailAllowlist(req.user);
 
-    if (req._oauthPlatform === 'mobile') {
-      res.clearCookie('oauth_platform');
-      const deepLink = `hakuasns://auth/success#token=${token}`;
-      return res.send(`<!DOCTYPE html>
+      logLoginSuccess({
+        method: 'google',
+        user: req.user,
+        extra: { platform: req._oauthPlatform || 'web' },
+      });
+
+      // JWTトークンを生成
+      const token = jwt.sign(
+        { id: req.user._id, email: req.user.email },
+        JWT_SECRET,
+        {
+          expiresIn: '7d',
+          issuer: JWT_ISSUER,
+          audience: JWT_AUDIENCE,
+        }
+      );
+
+      // Web: HttpOnly Cookieで返す
+      res.cookie(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS);
+
+      if (req._oauthPlatform === 'mobile') {
+        res.clearCookie('oauth_platform');
+        const deepLink = `hakuasns://auth/success#token=${token}`;
+        return res.send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>ログイン完了</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 </head>
@@ -251,10 +331,14 @@ router.get(
     }, 500);
   </script>
 </body></html>`);
-    }
+      }
 
-    const frontendUrl = process.env.FRONTEND_URL || '';
-    res.redirect(`${frontendUrl}/auth/success`);
+      const frontendUrl = process.env.FRONTEND_URL || '';
+      res.redirect(`${frontendUrl}/auth/success`);
+    } catch (err) {
+      console.error('[OAuth Callback] Privilege sync failed:', err);
+      return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=auth_failed`);
+    }
   }
 );
 
@@ -332,6 +416,10 @@ router.post('/apple', authLimiter, async (req, res) => {
     let user = await User.findOne({ appleId });
 
     if (user) {
+      if (!isAppEmailAllowed(user.email)) {
+        logAllowlistDenied({ method: 'apple-native', email: user.email });
+        return res.status(403).json({ error: APP_EMAIL_DENIED_MESSAGE });
+      }
       // 既存の Apple ユーザー
       console.log('[Auth] Apple login success (existing)', { userId: user._id, email: user.email });
     } else {
@@ -339,10 +427,19 @@ router.post('/apple', authLimiter, async (req, res) => {
       user = await User.findOne({ email });
 
       if (user) {
+        if (!isAppEmailAllowed(user.email || email)) {
+          logAllowlistDenied({ method: 'apple-native', email: user.email || email });
+          return res.status(403).json({ error: APP_EMAIL_DENIED_MESSAGE });
+        }
         user.appleId = appleId;
         await user.save();
         console.log('[Auth] Apple account linked to existing user', { userId: user._id, email });
       } else {
+        if (!isAppEmailAllowed(email)) {
+          logAllowlistDenied({ method: 'apple-native', email });
+          return res.status(403).json({ error: APP_EMAIL_DENIED_MESSAGE });
+        }
+
         // 5. 完全に新規ユーザー
         let username = 'User';
         if (fullName) {
@@ -378,6 +475,8 @@ router.post('/apple', authLimiter, async (req, res) => {
         audience: JWT_AUDIENCE,
       }
     );
+
+    await syncElevatedAccessByEmailAllowlist(user);
 
     logLoginSuccess({ method: 'apple-native', user });
 
@@ -446,6 +545,11 @@ router.post('/apple/callback', async (req, res) => {
         let user = await User.findOne({ appleId });
 
         if (user) {
+          if (!isAppEmailAllowed(user.email)) {
+            logAllowlistDenied({ method: 'apple-browser', email: user.email });
+            return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=allowlist_denied`);
+          }
+
           // 既存の Apple ユーザー
           console.log('[Auth] Apple login success (existing)', { userId: user._id, email: user.email });
         } else if (email) {
@@ -453,10 +557,20 @@ router.post('/apple/callback', async (req, res) => {
           user = await User.findOne({ email });
 
           if (user) {
+            if (!isAppEmailAllowed(user.email || email)) {
+              logAllowlistDenied({ method: 'apple-browser', email: user.email || email });
+              return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=allowlist_denied`);
+            }
+
             user.appleId = appleId;
             await user.save();
             console.log('[Auth] Apple account linked to existing user', { userId: user._id, email });
           } else {
+            if (!isAppEmailAllowed(email)) {
+              logAllowlistDenied({ method: 'apple-browser', email });
+              return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=allowlist_denied`);
+            }
+
             // 5. 完全に新規ユーザー
             let username = 'User';
             if (fullName) {
@@ -496,6 +610,8 @@ router.post('/apple/callback', async (req, res) => {
 
         // ブラウザ用: HttpOnly Cookie で返す
         res.cookie(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS);
+
+        await syncElevatedAccessByEmailAllowlist(user);
 
         logLoginSuccess({
           method: 'apple-browser',
