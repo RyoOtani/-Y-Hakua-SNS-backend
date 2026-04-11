@@ -7,6 +7,9 @@ const User = require("../models/User");
 const { authenticate } = require("../middleware/auth");
 const { sendPushToUser } = require("../utils/pushNotification");
 const { normalizeReplyToPayload } = require("../utils/replyTo");
+const { callGroqChatCompletion } = require("../utils/groqClient");
+const { isAiServiceEnabled } = require("../utils/aiServiceControl");
+const { censorText } = require("../utils/contentFilter");
 const {
   REPORT_TARGET_TYPES,
   normalizeReportReason,
@@ -45,8 +48,237 @@ const buildConversationLastMessageText = ({ text, attachments }) => {
 };
 
 const ACTIVE_MESSAGE_FILTER = { $ne: "hidden_by_reports" };
+const YAPPY_DM_CONTEXT_MAX_ITEMS = 30;
+const YAPPY_DM_TEXT_MAX_LENGTH = 220;
+const DEFAULT_YAPPY_DM_DISABLED_REPLY = "いまAIサービスが停止中なので、少し時間を置いてからもう一度メッセージしてね。";
+const DEFAULT_YAPPY_DM_ERROR_REPLY = "返信の作成に失敗したよ。少し時間を置いてもう一度送ってね。";
 
 const isMessageHidden = (message) => message?.moderationStatus === "hidden_by_reports";
+
+const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const normalizeContextText = (value) => (
+  String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, YAPPY_DM_TEXT_MAX_LENGTH)
+);
+
+const resolveYappyBotUser = async () => {
+  const configuredBotId = String(process.env.YAPPY_BOT_USER_ID || "").trim();
+  if (configuredBotId) {
+    const byId = await User.findById(configuredBotId).select("_id username profilePicture");
+    if (byId) return byId;
+    console.warn("[yappy-dm] YAPPY_BOT_USER_ID is set but no user was found");
+  }
+
+  const configuredBotUsername = String(process.env.YAPPY_BOT_USERNAME || "Yappy").trim();
+  if (!configuredBotUsername) return null;
+
+  const usernamePattern = new RegExp(`^${escapeRegExp(configuredBotUsername)}$`, "i");
+  return User.findOne({ username: usernamePattern }).select("_id username profilePicture");
+};
+
+const buildDmTimelineContext = async ({ conversationId, sourceMessageId }) => {
+  const messages = await Message.find(
+    buildActiveMessageQuery({ conversationId })
+  )
+    .select("sender text attachments createdAt")
+    .populate("sender", "username")
+    .sort({ createdAt: 1, _id: 1 });
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return {
+      timelineText: "（このメッセージが最初です）",
+      totalItems: 0,
+      omittedItems: 0,
+    };
+  }
+
+  const sourceId = String(sourceMessageId || "");
+  const sourceIndex = messages.findIndex((message) => String(message._id) === sourceId);
+  const visibleMessages = sourceIndex >= 0 ? messages.slice(0, sourceIndex + 1) : messages;
+
+  const omittedItems = Math.max(0, visibleMessages.length - YAPPY_DM_CONTEXT_MAX_ITEMS);
+  const recentMessages = omittedItems > 0
+    ? visibleMessages.slice(-YAPPY_DM_CONTEXT_MAX_ITEMS)
+    : visibleMessages;
+
+  const timelineText = recentMessages
+    .map((message, index) => {
+      const relativeIndex = omittedItems + index + 1;
+      const username = message?.sender?.username || "ユーザー";
+      const text = normalizeContextText(message?.text);
+      const hasAttachments = Array.isArray(message?.attachments) && message.attachments.length > 0;
+      const normalizedText = text || (hasAttachments ? "(添付ファイルのみ)" : "(本文なし)");
+      return `${relativeIndex}. ${username}: ${normalizedText}`;
+    })
+    .join("\n");
+
+  return {
+    timelineText: timelineText || "（メッセージ本文なし）",
+    totalItems: visibleMessages.length,
+    omittedItems,
+  };
+};
+
+const buildYappyDmReplyText = async ({
+  senderUsername,
+  senderText,
+  timelineText,
+  totalItems,
+  omittedItems,
+}) => {
+  if (!isAiServiceEnabled()) {
+    return DEFAULT_YAPPY_DM_DISABLED_REPLY;
+  }
+
+  try {
+    const completion = await callGroqChatCompletion({
+      messages: [
+        {
+          role: "system",
+          content: "あなたはYappyというSNSアシスタントです。DMの文脈を理解し、やさしく簡潔に日本語で1-3文で回答してください。危険・違法行為は助長せず安全に回答してください。",
+        },
+        {
+          role: "user",
+          content: [
+            "ユーザーからYappy宛にDMが届きました。会話の流れを理解して返信してください。",
+            `ここまでのメッセージ数: ${Number(totalItems || 0)}`,
+            omittedItems > 0 ? `文脈圧縮: 先頭${omittedItems}件は省略し、直近${YAPPY_DM_CONTEXT_MAX_ITEMS}件を提示` : "文脈圧縮: 省略なし",
+            "会話時系列:",
+            String(timelineText || "（会話なし）"),
+            `直近メッセージ送信者: ${String(senderUsername || "ユーザー")}`,
+            `直近メッセージ本文: ${String(senderText || "").trim() || "(本文なし)"}`,
+            "自然で簡潔な返信を作成してください。",
+          ].join("\n"),
+        },
+      ],
+      temperature: 0.4,
+      maxTokens: 260,
+    });
+
+    const reply = String(completion?.content || "").trim();
+    if (!reply) {
+      return DEFAULT_YAPPY_DM_ERROR_REPLY;
+    }
+
+    return reply.slice(0, 1000);
+  } catch (err) {
+    console.error("[yappy-dm] Groq reply generation failed:", err);
+    return DEFAULT_YAPPY_DM_ERROR_REPLY;
+  }
+};
+
+const postYappyAutoReplyInDm = async ({
+  conversation,
+  sourceMessage,
+  senderId,
+  senderUsername,
+  app,
+}) => {
+  if (!conversation || !sourceMessage || !senderId) return;
+
+  const yappyUser = await resolveYappyBotUser();
+  if (!yappyUser) {
+    console.warn("[yappy-dm] bot user is not configured. Set YAPPY_BOT_USER_ID or YAPPY_BOT_USERNAME.");
+    return;
+  }
+
+  if (String(senderId) === String(yappyUser._id)) {
+    return;
+  }
+
+  const memberIds = (conversation.members || []).map((memberId) => memberId.toString());
+  const includesYappy = memberIds.includes(String(yappyUser._id));
+  if (!includesYappy || memberIds.length !== 2 || conversation.isGroup) {
+    return;
+  }
+
+  const timelineContext = await buildDmTimelineContext({
+    conversationId: conversation._id,
+    sourceMessageId: sourceMessage._id,
+  });
+
+  const rawReply = await buildYappyDmReplyText({
+    senderUsername,
+    senderText: sourceMessage.text,
+    timelineText: timelineContext.timelineText,
+    totalItems: timelineContext.totalItems,
+    omittedItems: timelineContext.omittedItems,
+  });
+
+  const filteredReply = censorText(String(rawReply || "")).trim().slice(0, 1000);
+  const finalReply = filteredReply || DEFAULT_YAPPY_DM_ERROR_REPLY;
+
+  const yappyMessage = new Message({
+    conversationId: conversation._id,
+    sender: yappyUser._id,
+    text: finalReply,
+    attachments: [],
+  });
+  const savedYappyMessage = await yappyMessage.save();
+
+  conversation.lastMessage = savedYappyMessage._id;
+  conversation.lastMessageText = buildConversationLastMessageText({ text: finalReply, attachments: [] });
+  conversation.lastMessageAt = savedYappyMessage.createdAt;
+
+  memberIds
+    .filter((memberId) => memberId !== String(yappyUser._id))
+    .forEach((memberId) => {
+      const currentCount = conversation.unreadCount.get(memberId) || 0;
+      conversation.unreadCount.set(memberId, currentCount + 1);
+    });
+
+  await conversation.save();
+
+  const receiverIds = memberIds.filter((memberId) => memberId !== String(yappyUser._id));
+  const receiverDocs = await User.find({ _id: { $in: receiverIds } })
+    .select("_id blockedUsers mutedUsers notificationPreferences");
+
+  const allowedReceivers = receiverDocs.filter((receiver) => {
+    const blocked = receiver.blockedUsers || [];
+    const muted = receiver.mutedUsers || [];
+    const yappyId = String(yappyUser._id);
+    const isBlocked = blocked.map((id) => id.toString()).includes(yappyId);
+    const isMuted = muted.map((id) => id.toString()).includes(yappyId);
+    return !isBlocked && !isMuted;
+  });
+
+  const io = app.get("io");
+  allowedReceivers.forEach((receiver) => {
+    io.to(receiver._id.toString()).emit("getMessage", {
+      messageId: savedYappyMessage._id,
+      senderId: yappyUser._id,
+      senderName: yappyUser.username || "Yappy",
+      senderProfilePicture: yappyUser.profilePicture,
+      text: finalReply,
+      conversationId: conversation._id,
+      attachments: [],
+      replyTo: null,
+      createdAt: savedYappyMessage.createdAt,
+    });
+  });
+
+  const pushTargetIds = allowedReceivers
+    .filter((receiver) => receiver.notificationPreferences?.message !== false)
+    .map((receiver) => receiver._id.toString());
+
+  await Promise.allSettled(
+    pushTargetIds.map((receiverId) =>
+      sendPushToUser({
+        receiverId,
+        title: "Yappyからの返信",
+        body: finalReply.slice(0, 80),
+        data: {
+          type: "message",
+          conversationId: conversation._id,
+          senderId: yappyUser._id,
+        },
+      })
+    )
+  );
+};
 
 const buildActiveMessageQuery = (baseQuery = {}) => ({
   ...baseQuery,
@@ -214,6 +446,16 @@ router.post("/", authenticate, messageWriteLimiter, async (req, res) => {
     } catch (pushErr) {
       console.error("FCM notify error (message):", pushErr);
     }
+
+    void postYappyAutoReplyInDm({
+      conversation,
+      sourceMessage: savedMessage,
+      senderId: sender,
+      senderUsername: populatedMessage?.sender?.username,
+      app: req.app,
+    }).catch((yappyErr) => {
+      console.error("[yappy-dm] auto reply error:", yappyErr);
+    });
 
     res.status(201).json(populatedMessage);
   } catch (err) {

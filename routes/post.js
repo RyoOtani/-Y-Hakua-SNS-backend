@@ -32,6 +32,8 @@ const {
 const ACTIVE_CONTENT_STATUS = { $ne: "hidden_by_reports" };
 const DEFAULT_YAPPY_DISABLED_REPLY = "いまAIサービスが停止中なので、少し時間を置いてからもう一度 #Yappy で呼んでね。";
 const DEFAULT_YAPPY_ERROR_REPLY = "返信の作成に失敗したよ。少し時間を置いてからもう一度 #Yappy で呼んでね。";
+const YAPPY_COMMENT_CONTEXT_MAX_ITEMS = 40;
+const YAPPY_CONTEXT_TEXT_MAX_LENGTH = 220;
 
 const isNotificationEnabled = (userDoc, key) => {
   const prefs = userDoc?.notificationPreferences;
@@ -60,6 +62,55 @@ const hasCloseFriends = async (userId) => {
 const isHiddenByModeration = (doc) => doc?.moderationStatus === 'hidden_by_reports';
 
 const escapeRegExp = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const normalizeContextText = (value) => (
+  String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, YAPPY_CONTEXT_TEXT_MAX_LENGTH)
+);
+
+const buildCommentTimelineContext = async ({ postId, sourceCommentId }) => {
+  const comments = await Comment.find({
+    postId,
+    moderationStatus: ACTIVE_CONTENT_STATUS,
+  })
+    .select('userId desc createdAt')
+    .populate('userId', 'username')
+    .sort({ createdAt: 1, _id: 1 });
+
+  if (!Array.isArray(comments) || comments.length === 0) {
+    return {
+      timelineText: '（このコメントが最初のコメントです）',
+      totalItems: 0,
+      omittedItems: 0,
+    };
+  }
+
+  const sourceCommentIdString = String(sourceCommentId || '');
+  const sourceIndex = comments.findIndex((comment) => String(comment._id) === sourceCommentIdString);
+  const visibleComments = sourceIndex >= 0 ? comments.slice(0, sourceIndex + 1) : comments;
+
+  const omittedItems = Math.max(0, visibleComments.length - YAPPY_COMMENT_CONTEXT_MAX_ITEMS);
+  const recentComments = omittedItems > 0
+    ? visibleComments.slice(-YAPPY_COMMENT_CONTEXT_MAX_ITEMS)
+    : visibleComments;
+
+  const timelineText = recentComments
+    .map((comment, index) => {
+      const relativeIndex = omittedItems + index + 1;
+      const username = comment?.userId?.username || 'ユーザー';
+      const text = normalizeContextText(comment?.desc) || '(本文なし)';
+      return `${relativeIndex}. ${username}: ${text}`;
+    })
+    .join('\n');
+
+  return {
+    timelineText: timelineText || '（コメント本文なし）',
+    totalItems: visibleComments.length,
+    omittedItems,
+  };
+};
 
 const resolveYappyBotUser = async () => {
   const configuredBotId = String(process.env.YAPPY_BOT_USER_ID || '').trim();
@@ -112,7 +163,15 @@ const buildYappyReplyText = async ({ postAuthorUsername, postText }) => {
   }
 };
 
-const buildYappyReplyToCommentText = async ({ commentAuthorUsername, commentText }) => {
+const buildYappyReplyToCommentText = async ({
+  postAuthorUsername,
+  postText,
+  commentAuthorUsername,
+  commentText,
+  commentTimelineText,
+  totalComments,
+  omittedComments,
+}) => {
   if (!isAiServiceEnabled()) {
     return DEFAULT_YAPPY_DISABLED_REPLY;
   }
@@ -127,9 +186,16 @@ const buildYappyReplyToCommentText = async ({ commentAuthorUsername, commentText
         {
           role: 'user',
           content: [
-            '#Yappyでコメントから呼ばれました。次のコメントへ自然に返信してください。',
+            '#Yappyでコメントから呼ばれました。投稿から現在コメントまでの流れを理解して返信してください。',
+            `投稿者: ${String(postAuthorUsername || 'ユーザー')}`,
+            `投稿本文: ${String(postText || '').trim() || '(本文なし)'}`,
+            `ここまでのコメント数: ${Number(totalComments || 0)}`,
+            omittedComments > 0 ? `文脈圧縮: 先頭${omittedComments}件は省略し、直近${YAPPY_COMMENT_CONTEXT_MAX_ITEMS}件を提示` : '文脈圧縮: 省略なし',
+            'コメント時系列:',
+            String(commentTimelineText || '（コメントなし）'),
             `コメント投稿者: ${String(commentAuthorUsername || 'ユーザー')}`,
             `コメント本文: ${String(commentText || '').trim() || '(本文なし)'}`,
+            '上記の流れに沿って、コメント投稿者に向けて自然に1-3文で返信してください。',
           ].join('\n'),
         },
       ],
@@ -259,9 +325,20 @@ const postYappyAutoReplyToComment = async ({
     return;
   }
 
+  const postAuthor = await User.findById(post.userId).select('username');
+  const timelineContext = await buildCommentTimelineContext({
+    postId: post._id,
+    sourceCommentId: sourceComment?._id,
+  });
+
   const rawReply = await buildYappyReplyToCommentText({
+    postAuthorUsername: postAuthor?.username,
+    postText: post?.desc,
     commentAuthorUsername: sourceCommentAuthorUsername,
     commentText: sourceCommentText,
+    commentTimelineText: timelineContext.timelineText,
+    totalComments: timelineContext.totalItems,
+    omittedComments: timelineContext.omittedItems,
   });
 
   const mention = sourceCommentAuthorUsername ? `@${sourceCommentAuthorUsername} ` : '';
