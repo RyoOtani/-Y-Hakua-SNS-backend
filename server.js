@@ -158,13 +158,13 @@ const addUser = (userId, socketId) => {
   return { alreadyOnline: false };
 };
 
-const formatUsernameForPresenceLog = (username, clientApp = null) => {
+const formatUsernameForPresenceLog = (username, clientApp = null, statusSuffix = '') => {
   const normalizedUsername = String(username || 'unknown');
   const usernameWithClientApp =
     normalizeClientApp(clientApp) === CLIENT_APP_CLASSROOM_ONLY
       ? `${normalizedUsername}${CLASSROOM_ONLY_SUFFIX}`
       : normalizedUsername;
-  return `username： ${usernameWithClientApp}`;
+  return `username： ${usernameWithClientApp}${statusSuffix}`;
 };
 
 const removeUser = (socketId) => {
@@ -276,7 +276,12 @@ io.on("connection", (socket) => {
       const usernameLabel = formatUsernameForPresenceLog(resolvedUser?.username, clientApp);
 
       if (source === 'app_resume') {
-        console.log(`[presence] online again (app resume) ${usernameLabel}`);
+        const resumedUsernameLabel = formatUsernameForPresenceLog(
+          resolvedUser?.username,
+          clientApp,
+          '（online again）'
+        );
+        console.log(`[presence] ${resumedUsernameLabel}`);
       } else if (addResult?.alreadyOnline) {
         console.log(`[presence] online (socket reconnected) ${usernameLabel}`);
       } else {
