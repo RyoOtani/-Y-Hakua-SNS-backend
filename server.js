@@ -134,6 +134,16 @@ app.set('io', io);
 // Socket.io ユーザー管理
 let users = [];
 
+const CLIENT_APP_CLASSROOM_ONLY = "classroom_only";
+const CLASSROOM_ONLY_SUFFIX = "（Classroom Only）";
+
+const normalizeClientApp = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === CLIENT_APP_CLASSROOM_ONLY) return CLIENT_APP_CLASSROOM_ONLY;
+  return null;
+};
+
 const addUser = (userId, socketId) => {
   const existingUserIndex = users.findIndex((user) => user.userId === userId);
   if (existingUserIndex !== -1) {
@@ -148,7 +158,14 @@ const addUser = (userId, socketId) => {
   return { alreadyOnline: false };
 };
 
-const formatUsernameForPresenceLog = (username) => `username： ${String(username || 'unknown')}`;
+const formatUsernameForPresenceLog = (username, clientApp = null) => {
+  const normalizedUsername = String(username || 'unknown');
+  const usernameWithClientApp =
+    normalizeClientApp(clientApp) === CLIENT_APP_CLASSROOM_ONLY
+      ? `${normalizedUsername}${CLASSROOM_ONLY_SUFFIX}`
+      : normalizedUsername;
+  return `username： ${usernameWithClientApp}`;
+};
 
 const removeUser = (socketId) => {
   users = users.filter((user) => user.socketId !== socketId);
@@ -250,10 +267,13 @@ io.on("connection", (socket) => {
     io.emit("getUsers", users);
 
     const source = options && typeof options === 'object' ? options.source : undefined;
+    const clientApp =
+      typeof options === "object" && options
+        ? normalizeClientApp(options.clientApp)
+        : null;
     try {
       const resolvedUser = await User.findById(userId).select('username');
-      const username = resolvedUser?.username || userId;
-      const usernameLabel = formatUsernameForPresenceLog(username);
+      const usernameLabel = formatUsernameForPresenceLog(resolvedUser?.username, clientApp);
 
       if (source === 'app_resume') {
         console.log(`[presence] online again (app resume) ${usernameLabel}`);

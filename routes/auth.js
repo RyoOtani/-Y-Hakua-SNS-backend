@@ -46,6 +46,31 @@ const AUTH_COOKIE_OPTIONS = {
   maxAge: 7 * 24 * 60 * 60 * 1000,
   path: '/',
 };
+const OAUTH_CLIENT_APP_COOKIE_NAME = 'oauth_client_app';
+const CLIENT_APP_CLASSROOM_ONLY = 'classroom_only';
+const CLASSROOM_ONLY_SUFFIX = '（Classroom Only）';
+
+const normalizeClientApp = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === CLIENT_APP_CLASSROOM_ONLY) return CLIENT_APP_CLASSROOM_ONLY;
+  return null;
+};
+
+const resolveClientAppFromRequest = (req) => {
+  const headerClientApp = req.get('x-client-app') || req.get('x-clientapp');
+  const queryClientApp = req.query?.clientApp;
+  const bodyClientApp = req.body?.clientApp;
+  return normalizeClientApp(headerClientApp || queryClientApp || bodyClientApp);
+};
+
+const formatUsernameForClientAppLog = (username, clientApp) => {
+  const normalizedUsername = String(username || 'unknown');
+  if (normalizeClientApp(clientApp) === CLIENT_APP_CLASSROOM_ONLY) {
+    return `${normalizedUsername}${CLASSROOM_ONLY_SUFFIX}`;
+  }
+  return normalizedUsername;
+};
 
 const getUsernameForLog = (user) => {
   if (user?.username) return String(user.username);
@@ -53,11 +78,13 @@ const getUsernameForLog = (user) => {
   return 'unknown';
 };
 
-const logLoginSuccess = ({ method, user, extra = {} }) => {
+const logLoginSuccess = ({ method, user, extra = {}, clientApp = null }) => {
   const username = getUsernameForLog(user);
-  console.log(`[Auth] login success method=${method} username： ${username}`, {
+  const usernameLabel = formatUsernameForClientAppLog(username, clientApp);
+  console.log(`[Auth] login success method=${method} username： ${usernameLabel}`, {
     userId: user?._id ? String(user._id) : null,
     email: user?.email || null,
+    clientApp: normalizeClientApp(clientApp),
     ...extra,
     at: new Date().toISOString(),
   });
@@ -65,9 +92,10 @@ const logLoginSuccess = ({ method, user, extra = {} }) => {
 
 const APP_EMAIL_DENIED_MESSAGE = 'このメールアドレスは利用を許可されていません';
 
-const logAllowlistDenied = ({ method, email }) => {
+const logAllowlistDenied = ({ method, email, clientApp = null }) => {
   console.warn(`[Auth] allowlist denied method=${method}`, {
     email: normalizeEmail(email),
+    clientApp: normalizeClientApp(clientApp),
     at: new Date().toISOString(),
   });
 };
@@ -165,6 +193,7 @@ router.post("/register", authLimiter, async (req, res) => {
 router.post("/login", authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
+    const clientApp = resolveClientAppFromRequest(req);
     if (!email || !password) {
       return res.status(400).json({ error: 'メールアドレスとパスワードは必須です' });
     }
@@ -175,7 +204,7 @@ router.post("/login", authLimiter, async (req, res) => {
     const user = await User.findOne({ email });
     if (!user) return authFailed();
     if (!isAppEmailAllowed(user.email || email)) {
-      logAllowlistDenied({ method: 'password', email: user.email || email });
+      logAllowlistDenied({ method: 'password', email: user.email || email, clientApp });
       return res.status(403).json({ error: APP_EMAIL_DENIED_MESSAGE });
     }
 
@@ -202,7 +231,7 @@ router.post("/login", authLimiter, async (req, res) => {
 
     await syncElevatedAccessByEmailAllowlist(user);
 
-    logLoginSuccess({ method: 'password', user });
+    logLoginSuccess({ method: 'password', user, clientApp });
 
     const { password: _, accessToken: _a, refreshToken: _r, ...userWithoutSensitive } = user._doc;
     return res.status(200).json({ ...userWithoutSensitive, token });
@@ -217,6 +246,16 @@ router.post("/login", authLimiter, async (req, res) => {
 router.get(
   '/google',
   (req, res, next) => {
+    const clientApp = normalizeClientApp(req.query?.clientApp || req.get('x-client-app'));
+    if (clientApp) {
+      req.session.oauthClientApp = clientApp;
+      res.cookie(OAUTH_CLIENT_APP_COOKIE_NAME, clientApp, {
+        maxAge: 5 * 60 * 1000,
+        httpOnly: true,
+        sameSite: 'lax',
+      });
+    }
+
     if (req.query.platform === 'mobile') {
       // セッションとCookieの両方に保存（冗長性確保）
       req.session.oauthPlatform = 'mobile';
@@ -257,6 +296,13 @@ router.get(
       const match = cookies.match(/oauth_platform=([^;]+)/);
       if (match) req._oauthPlatform = match[1];
     }
+    req._oauthClientApp = req.session?.oauthClientApp || null;
+    if (!req._oauthClientApp) {
+      const cookies = req.headers.cookie || '';
+      const match = cookies.match(new RegExp(`${OAUTH_CLIENT_APP_COOKIE_NAME}=([^;]+)`));
+      if (match) req._oauthClientApp = match[1];
+    }
+    req._oauthClientApp = normalizeClientApp(req._oauthClientApp);
     console.log('[OAuth Callback] Platform detected:', req._oauthPlatform);
     next();
   },
@@ -265,7 +311,7 @@ router.get(
       const frontendUrl = process.env.FRONTEND_URL || '';
 
       if (!err && !user && info?.message === 'allowlist_denied') {
-        logAllowlistDenied({ method: 'google', email: info?.email });
+        logAllowlistDenied({ method: 'google', email: info?.email, clientApp: req._oauthClientApp });
         return res.redirect(`${frontendUrl}/login?error=allowlist_denied`);
       }
 
@@ -285,7 +331,7 @@ router.get(
   async (req, res) => {
     try {
       if (!isAppEmailAllowed(req.user?.email)) {
-        logAllowlistDenied({ method: 'google', email: req.user?.email });
+        logAllowlistDenied({ method: 'google', email: req.user?.email, clientApp: req._oauthClientApp });
         return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=allowlist_denied`);
       }
 
@@ -295,6 +341,7 @@ router.get(
         method: 'google',
         user: req.user,
         extra: { platform: req._oauthPlatform || 'web' },
+        clientApp: req._oauthClientApp,
       });
 
       // JWTトークンを生成
@@ -313,7 +360,11 @@ router.get(
 
       if (req._oauthPlatform === 'mobile') {
         res.clearCookie('oauth_platform');
-        const deepLink = `hakuasns://auth/success#token=${token}`;
+        res.clearCookie(OAUTH_CLIENT_APP_COOKIE_NAME);
+        const deepLinkScheme = req._oauthClientApp === CLIENT_APP_CLASSROOM_ONLY
+          ? 'onlyclassroom'
+          : 'hakuasns';
+        const deepLink = `${deepLinkScheme}://auth/success#token=${token}`;
         return res.send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>ログイン完了</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -345,6 +396,16 @@ router.get(
 
 // Apple OAuth Web ログイン（ブラウザ用）
 router.get('/apple', (req, res, next) => {
+  const clientApp = normalizeClientApp(req.query?.clientApp || req.get('x-client-app'));
+  if (clientApp) {
+    req.session.oauthClientApp = clientApp;
+    res.cookie(OAUTH_CLIENT_APP_COOKIE_NAME, clientApp, {
+      maxAge: 5 * 60 * 1000,
+      httpOnly: true,
+      sameSite: 'lax',
+    });
+  }
+
   if (req.query.platform === 'mobile') {
     req.session.oauthPlatform = 'mobile';
     res.cookie('oauth_platform', 'mobile', {
@@ -379,6 +440,7 @@ router.get('/apple', (req, res, next) => {
 router.post('/apple', authLimiter, async (req, res) => {
   try {
     const { identityToken, fullName, email: clientEmail } = req.body;
+    const clientApp = resolveClientAppFromRequest(req);
 
     if (!identityToken) {
       return res.status(400).json({ error: 'identityToken は必須です' });
@@ -418,7 +480,7 @@ router.post('/apple', authLimiter, async (req, res) => {
 
     if (user) {
       if (!isAppEmailAllowed(user.email)) {
-        logAllowlistDenied({ method: 'apple-native', email: user.email });
+        logAllowlistDenied({ method: 'apple-native', email: user.email, clientApp });
         return res.status(403).json({ error: APP_EMAIL_DENIED_MESSAGE });
       }
       // 既存の Apple ユーザー
@@ -429,7 +491,7 @@ router.post('/apple', authLimiter, async (req, res) => {
 
       if (user) {
         if (!isAppEmailAllowed(user.email || email)) {
-          logAllowlistDenied({ method: 'apple-native', email: user.email || email });
+          logAllowlistDenied({ method: 'apple-native', email: user.email || email, clientApp });
           return res.status(403).json({ error: APP_EMAIL_DENIED_MESSAGE });
         }
         user.appleId = appleId;
@@ -437,7 +499,7 @@ router.post('/apple', authLimiter, async (req, res) => {
         console.log('[Auth] Apple account linked to existing user', { userId: user._id, email });
       } else {
         if (!isAppEmailAllowed(email)) {
-          logAllowlistDenied({ method: 'apple-native', email });
+          logAllowlistDenied({ method: 'apple-native', email, clientApp });
           return res.status(403).json({ error: APP_EMAIL_DENIED_MESSAGE });
         }
 
@@ -479,7 +541,7 @@ router.post('/apple', authLimiter, async (req, res) => {
 
     await syncElevatedAccessByEmailAllowlist(user);
 
-    logLoginSuccess({ method: 'apple-native', user });
+    logLoginSuccess({ method: 'apple-native', user, clientApp });
 
     const { password: _, accessToken: _a, refreshToken: _r, ...userWithoutSensitive } = user._doc;
     return res.status(200).json({ ...userWithoutSensitive, token });
@@ -500,6 +562,10 @@ router.post('/apple/callback', async (req, res) => {
     const cookies = req.headers.cookie || '';
     const cookiePlatformMatch = cookies.match(/oauth_platform=([^;]+)/);
     const oauthPlatform = sessionPlatform || (cookiePlatformMatch ? cookiePlatformMatch[1] : null);
+    const cookieClientAppMatch = cookies.match(new RegExp(`${OAUTH_CLIENT_APP_COOKIE_NAME}=([^;]+)`));
+    const oauthClientApp = normalizeClientApp(
+      req.session?.oauthClientApp || (cookieClientAppMatch ? cookieClientAppMatch[1] : null)
+    );
 
     // state の検証（CSRF保護）
     if (state !== req.session.id) {
@@ -547,7 +613,7 @@ router.post('/apple/callback', async (req, res) => {
 
         if (user) {
           if (!isAppEmailAllowed(user.email)) {
-            logAllowlistDenied({ method: 'apple-browser', email: user.email });
+            logAllowlistDenied({ method: 'apple-browser', email: user.email, clientApp: oauthClientApp });
             return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=allowlist_denied`);
           }
 
@@ -559,7 +625,7 @@ router.post('/apple/callback', async (req, res) => {
 
           if (user) {
             if (!isAppEmailAllowed(user.email || email)) {
-              logAllowlistDenied({ method: 'apple-browser', email: user.email || email });
+              logAllowlistDenied({ method: 'apple-browser', email: user.email || email, clientApp: oauthClientApp });
               return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=allowlist_denied`);
             }
 
@@ -568,7 +634,7 @@ router.post('/apple/callback', async (req, res) => {
             console.log('[Auth] Apple account linked to existing user', { userId: user._id, email });
           } else {
             if (!isAppEmailAllowed(email)) {
-              logAllowlistDenied({ method: 'apple-browser', email });
+              logAllowlistDenied({ method: 'apple-browser', email, clientApp: oauthClientApp });
               return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=allowlist_denied`);
             }
 
@@ -618,11 +684,16 @@ router.post('/apple/callback', async (req, res) => {
           method: 'apple-browser',
           user,
           extra: { platform: oauthPlatform || 'web' },
+          clientApp: oauthClientApp,
         });
 
         if (oauthPlatform === 'mobile') {
           res.clearCookie('oauth_platform');
-          const deepLink = `hakuasns://auth/success#token=${token}`;
+          res.clearCookie(OAUTH_CLIENT_APP_COOKIE_NAME);
+          const deepLinkScheme = oauthClientApp === CLIENT_APP_CLASSROOM_ONLY
+            ? 'onlyclassroom'
+            : 'hakuasns';
+          const deepLink = `${deepLinkScheme}://auth/success#token=${token}`;
           return res.send(`<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>ログイン完了</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
