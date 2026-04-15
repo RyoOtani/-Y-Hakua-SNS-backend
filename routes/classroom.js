@@ -4,172 +4,461 @@ const User = require('../models/User');
 const passport = require('passport');
 const { decrypt, encrypt } = require('../utils/crypto');
 
-// Use JWT authentication strategy
-router.get('/courses', passport.authenticate('jwt', { session: false }), async (req, res) => {
-  try {
-    // 1. セッションからユーザー情報を取得
-    const user = await User.findById(req.user.id);
-    if (!user || !user.refreshToken) {
-      console.log('Refresh token is missing for user:', req.user.id);
-      // リフレッシュトークンがない場合は、再ログインを促す
-      return res.status(401).json({ message: 'Googleアカウントで再ログインして、アクセスを許可してください。' });
-    }
+const requireJwt = passport.authenticate('jwt', { session: false });
+const MAX_PAGE_SIZE = 100;
 
-    // 2. GoogleのOAuth2クライアントをセットアップ
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_CALLBACK_URL || '/api/auth/google/callback' // passport.jsのcallbackURLと合わせる
-    );
+const parsePageSize = (value, fallback = 30) => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, MAX_PAGE_SIZE);
+};
 
-    // 3. ユーザーのDBから取得したトークンをクライアントにセット
-    const refreshToken = user.refreshToken ? decrypt(user.refreshToken) : null;
-    if (!refreshToken) {
-      return res.status(401).json({ message: 'Google認証が必要です。再ログインしてください。' });
-    }
+const parseBooleanQuery = (value, fallback = false) => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
+};
 
-    oauth2Client.setCredentials({
-      refresh_token: refreshToken,
-    });
-
-    // 4. (重要) トークンが更新された場合に備えてイベントリスナーをセット
-    // googleapisライブラリが自動でトークンをリフレッシュし、このイベントが発火します
-    oauth2Client.on('tokens', async (tokens) => {
-      // access tokenはDB保存しない。refresh tokenが来たときだけ再保存。
-      if (tokens.refresh_token) {
-        await User.findByIdAndUpdate(user.id, { refreshToken: encrypt(tokens.refresh_token) });
-      }
-    });
-
-    // 5. Classroom APIクライアントを作成
-    const classroom = google.classroom({ version: 'v1', auth: oauth2Client });
-
-    // 6. コース一覧を取得
-    const apiResponse = await classroom.courses.list({});
-
-    res.json(apiResponse.data.courses || []);
-
-  } catch (error) {
-    console.error('Failed to fetch classroom courses:', error.message);
-    if (error.response && (error.response.status === 400 || error.response.status === 401)) {
-      console.error('Google API Auth Error:', error.response.data);
-      return res.status(401).json({ message: 'Googleの認証に失敗しました。アカウント連携を確認し、再ログインしてください。' });
-    }
-    res.status(500).json({ message: 'コースの取得中にサーバーエラーが発生しました。' });
+const ensureGoogleClassroomClient = async (userId) => {
+  const user = await User.findById(userId).select('refreshToken email');
+  if (!user || !user.refreshToken) {
+    const error = new Error('Google認証が必要です。再ログインしてください。');
+    error.statusCode = 401;
+    throw error;
   }
+
+  const refreshToken = decrypt(user.refreshToken);
+  if (!refreshToken) {
+    const error = new Error('Google認証が必要です。再ログインしてください。');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    process.env.GOOGLE_CALLBACK_URL || '/api/auth/google/callback'
+  );
+
+  oauth2Client.setCredentials({ refresh_token: refreshToken });
+
+  oauth2Client.on('tokens', async (tokens) => {
+    if (!tokens?.refresh_token) return;
+    await User.findByIdAndUpdate(userId, { refreshToken: encrypt(tokens.refresh_token) });
+  });
+
+  return google.classroom({ version: 'v1', auth: oauth2Client });
+};
+
+const toDateValue = (value) => {
+  if (!value) return 0;
+  const ts = new Date(value).getTime();
+  return Number.isFinite(ts) ? ts : 0;
+};
+
+const toDueAtIso = (dueDate, dueTime) => {
+  if (!dueDate || !dueDate.year || !dueDate.month || !dueDate.day) return null;
+  const hours = Number.isFinite(dueTime?.hours) ? dueTime.hours : 23;
+  const minutes = Number.isFinite(dueTime?.minutes) ? dueTime.minutes : 59;
+  const seconds = Number.isFinite(dueTime?.seconds) ? dueTime.seconds : 0;
+
+  const dueAt = new Date(Date.UTC(
+    dueDate.year,
+    dueDate.month - 1,
+    dueDate.day,
+    hours,
+    minutes,
+    seconds
+  ));
+
+  return Number.isFinite(dueAt.getTime()) ? dueAt.toISOString() : null;
+};
+
+const mapMaterialLinks = (materials = []) => {
+  if (!Array.isArray(materials)) return [];
+
+  const links = [];
+  materials.forEach((material) => {
+    if (material?.link?.url) {
+      links.push({
+        type: 'link',
+        title: material.link.title || material.link.url,
+        url: material.link.url,
+      });
+    }
+
+    if (material?.youtubeVideo?.alternateLink) {
+      links.push({
+        type: 'youtube',
+        title: material.youtubeVideo.title || material.youtubeVideo.alternateLink,
+        url: material.youtubeVideo.alternateLink,
+        thumbnailUrl: material.youtubeVideo.thumbnailUrl || null,
+      });
+    }
+
+    if (material?.driveFile?.driveFile?.alternateLink) {
+      links.push({
+        type: 'drive_file',
+        title: material.driveFile.driveFile.title || material.driveFile.driveFile.alternateLink,
+        url: material.driveFile.driveFile.alternateLink,
+      });
+    }
+
+    if (material?.driveFolder?.alternateLink) {
+      links.push({
+        type: 'drive_folder',
+        title: material.driveFolder.title || material.driveFolder.alternateLink,
+        url: material.driveFolder.alternateLink,
+      });
+    }
+
+    if (material?.form?.formUrl) {
+      links.push({
+        type: 'form',
+        title: material.form.title || material.form.formUrl,
+        url: material.form.formUrl,
+      });
+    }
+  });
+
+  return links;
+};
+
+const normalizeCourse = (course) => ({
+  id: course.id,
+  name: course.name,
+  section: course.section || '',
+  description: course.description || '',
+  descriptionHeading: course.descriptionHeading || '',
+  room: course.room || '',
+  courseState: course.courseState,
+  enrollmentCode: course.enrollmentCode || '',
+  ownerId: course.ownerId || null,
+  alternateLink: course.alternateLink || '',
+  updateTime: course.updateTime || null,
 });
 
-// アナウンスメントを取得する新しいルート
-router.get('/announcements', passport.authenticate('jwt', { session: false }), async (req, res) => {
-  console.log(`[Classroom] GET /announcements hit for user: ${req.user.id} (${req.user.email})`);
-  try {
-    const user = await User.findById(req.user.id);
-    if (!user || !user.refreshToken) {
-      return res.status(401).json({ message: 'Google認証が必要です。' });
-    }
+const normalizeAnnouncement = (item, course) => ({
+  id: item.id,
+  type: 'announcement',
+  courseId: course.id,
+  courseName: course.name,
+  courseLink: course.alternateLink,
+  text: item.text || '',
+  state: item.state || '',
+  alternateLink: item.alternateLink || '',
+  creatorUserId: item.creatorUserId || null,
+  creationTime: item.creationTime || null,
+  updateTime: item.updateTime || null,
+  materials: mapMaterialLinks(item.materials),
+});
 
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_CALLBACK_URL || '/api/auth/google/callback'
+const normalizeCourseWork = (item, course, topicName = '', submissionState = null) => ({
+  id: item.id,
+  type: 'coursework',
+  courseId: course.id,
+  courseName: course.name,
+  courseLink: course.alternateLink,
+  title: item.title || '',
+  description: item.description || '',
+  state: item.state || '',
+  workType: item.workType || '',
+  maxPoints: Number.isFinite(item.maxPoints) ? item.maxPoints : null,
+  topicId: item.topicId || null,
+  topicName: topicName || '',
+  dueDate: item.dueDate || null,
+  dueTime: item.dueTime || null,
+  dueAt: toDueAtIso(item.dueDate, item.dueTime),
+  alternateLink: item.alternateLink || '',
+  creationTime: item.creationTime || null,
+  updateTime: item.updateTime || null,
+  submissionState,
+  materials: mapMaterialLinks(item.materials),
+});
+
+const normalizeMaterial = (item, course, topicName = '') => ({
+  id: item.id,
+  type: 'material',
+  courseId: course.id,
+  courseName: course.name,
+  courseLink: course.alternateLink,
+  title: item.title || '',
+  description: item.description || '',
+  state: item.state || '',
+  topicId: item.topicId || null,
+  topicName: topicName || '',
+  alternateLink: item.alternateLink || '',
+  creationTime: item.creationTime || null,
+  updateTime: item.updateTime || null,
+  materials: mapMaterialLinks(item.materials),
+});
+
+const buildTopicMap = (topics = []) => {
+  const map = new Map();
+  topics.forEach((topic) => {
+    if (topic?.topicId) {
+      map.set(topic.topicId, topic.name || 'トピックなし');
+    }
+  });
+  return map;
+};
+
+const withClassroomClient = async (req, res, handler) => {
+  try {
+    const classroom = await ensureGoogleClassroomClient(req.user.id);
+    await handler(classroom);
+  } catch (error) {
+    const statusCode = error.statusCode || error.response?.status || 500;
+    const message =
+      statusCode === 401
+        ? 'Googleの認証に失敗しました。アカウント連携を確認し、再ログインしてください。'
+        : error.message || 'Classroomデータの取得中にエラーが発生しました。';
+
+    console.error('[Classroom] Request failed:', {
+      path: req.originalUrl,
+      userId: req.user?.id || null,
+      statusCode,
+      message: error.message,
+      apiError: error.response?.data || null,
+    });
+
+    return res.status(statusCode).json({ message });
+  }
+};
+
+router.get('/courses', requireJwt, async (req, res) => {
+  return withClassroomClient(req, res, async (classroom) => {
+    const pageSize = parsePageSize(req.query.pageSize, 50);
+    let pageToken;
+    const courses = [];
+
+    do {
+      const response = await classroom.courses.list({
+        courseStates: ['ACTIVE'],
+        pageSize,
+        pageToken,
+      });
+      courses.push(...(response.data.courses || []));
+      pageToken = response.data.nextPageToken;
+    } while (pageToken);
+
+    const normalizedCourses = courses
+      .map(normalizeCourse)
+      .sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+
+    return res.json(normalizedCourses);
+  });
+});
+
+router.get('/courses/:courseId/announcements', requireJwt, async (req, res) => {
+  return withClassroomClient(req, res, async (classroom) => {
+    const pageSize = parsePageSize(req.query.pageSize, 30);
+    const { courseId } = req.params;
+
+    const [courseRes, announceRes] = await Promise.all([
+      classroom.courses.get({ id: courseId }),
+      classroom.courses.announcements.list({ courseId, pageSize }),
+    ]);
+
+    const course = normalizeCourse(courseRes.data);
+    const announcements = (announceRes.data.announcements || [])
+      .map((item) => normalizeAnnouncement(item, course))
+      .sort((a, b) => toDateValue(b.updateTime || b.creationTime) - toDateValue(a.updateTime || a.creationTime));
+
+    return res.json(announcements);
+  });
+});
+
+router.get('/courses/:courseId/coursework', requireJwt, async (req, res) => {
+  return withClassroomClient(req, res, async (classroom) => {
+    const pageSize = parsePageSize(req.query.pageSize, 50);
+    const includeSubmissions = parseBooleanQuery(req.query.includeSubmissions, true);
+    const { courseId } = req.params;
+
+    const [courseRes, topicsRes, workRes] = await Promise.all([
+      classroom.courses.get({ id: courseId }),
+      classroom.courses.topics.list({ courseId, pageSize: 100 }).catch(() => ({ data: { topic: [] } })),
+      classroom.courses.courseWork.list({ courseId, pageSize }),
+    ]);
+
+    const course = normalizeCourse(courseRes.data);
+    const topicMap = buildTopicMap(topicsRes.data.topic || []);
+    const works = workRes.data.courseWork || [];
+
+    const normalizedWork = await Promise.all(works.map(async (item) => {
+      let submissionState = null;
+
+      if (includeSubmissions) {
+        try {
+          const subRes = await classroom.courses.courseWork.studentSubmissions.list({
+            courseId,
+            courseWorkId: item.id,
+            userId: 'me',
+            pageSize: 1,
+          });
+
+          submissionState = subRes.data.studentSubmissions?.[0]?.state || null;
+        } catch (_) {
+          submissionState = null;
+        }
+      }
+
+      return normalizeCourseWork(item, course, topicMap.get(item.topicId || '') || '', submissionState);
+    }));
+
+    normalizedWork.sort((a, b) => toDateValue(b.updateTime || b.creationTime) - toDateValue(a.updateTime || a.creationTime));
+    return res.json(normalizedWork);
+  });
+});
+
+router.get('/courses/:courseId/materials', requireJwt, async (req, res) => {
+  return withClassroomClient(req, res, async (classroom) => {
+    const pageSize = parsePageSize(req.query.pageSize, 50);
+    const { courseId } = req.params;
+
+    const [courseRes, topicsRes, materialRes] = await Promise.all([
+      classroom.courses.get({ id: courseId }),
+      classroom.courses.topics.list({ courseId, pageSize: 100 }).catch(() => ({ data: { topic: [] } })),
+      classroom.courses.courseWorkMaterials.list({ courseId, pageSize }),
+    ]);
+
+    const course = normalizeCourse(courseRes.data);
+    const topicMap = buildTopicMap(topicsRes.data.topic || []);
+    const materials = (materialRes.data.courseWorkMaterial || [])
+      .map((item) => normalizeMaterial(item, course, topicMap.get(item.topicId || '') || ''))
+      .sort((a, b) => toDateValue(b.updateTime || b.creationTime) - toDateValue(a.updateTime || a.creationTime));
+
+    return res.json(materials);
+  });
+});
+
+router.get('/courses/:courseId/stream', requireJwt, async (req, res) => {
+  return withClassroomClient(req, res, async (classroom) => {
+    const pageSize = parsePageSize(req.query.pageSize, 30);
+    const { courseId } = req.params;
+
+    const [courseRes, topicsRes, announceRes, workRes, materialRes] = await Promise.all([
+      classroom.courses.get({ id: courseId }),
+      classroom.courses.topics.list({ courseId, pageSize: 100 }).catch(() => ({ data: { topic: [] } })),
+      classroom.courses.announcements.list({ courseId, pageSize }).catch(() => ({ data: { announcements: [] } })),
+      classroom.courses.courseWork.list({ courseId, pageSize }).catch(() => ({ data: { courseWork: [] } })),
+      classroom.courses.courseWorkMaterials.list({ courseId, pageSize }).catch(() => ({ data: { courseWorkMaterial: [] } })),
+    ]);
+
+    const course = normalizeCourse(courseRes.data);
+    const topicMap = buildTopicMap(topicsRes.data.topic || []);
+
+    const announcements = (announceRes.data.announcements || []).map((item) => normalizeAnnouncement(item, course));
+    const works = (workRes.data.courseWork || []).map((item) =>
+      normalizeCourseWork(item, course, topicMap.get(item.topicId || '') || '', null)
+    );
+    const materials = (materialRes.data.courseWorkMaterial || []).map((item) =>
+      normalizeMaterial(item, course, topicMap.get(item.topicId || '') || '')
     );
 
-    const refreshToken = user.refreshToken ? decrypt(user.refreshToken) : null;
-    if (!refreshToken) {
-      return res.status(401).json({ message: 'Google認証が必要です。再ログインしてください。' });
-    }
-
-    oauth2Client.setCredentials({
-      refresh_token: refreshToken,
+    const streamItems = [...announcements, ...works, ...materials].sort((a, b) => {
+      const aDate = toDateValue(a.updateTime || a.creationTime || a.dueAt);
+      const bDate = toDateValue(b.updateTime || b.creationTime || b.dueAt);
+      return bDate - aDate;
     });
 
-    oauth2Client.on('tokens', async (tokens) => {
-      console.log(`[Classroom] Tokens event: tokens received for user ${user._id}`);
-      const updates = {};
-      // access_tokenはDBに保存しない
-      if (tokens.refresh_token) updates.refreshToken = encrypt(tokens.refresh_token);
+    return res.json(streamItems);
+  });
+});
 
-      if (Object.keys(updates).length > 0) {
-        await User.findByIdAndUpdate(user.id, updates);
-        console.log(`[Classroom] Tokens updated for user ${user._id}: ${Object.keys(updates).join(', ')}`);
-      }
-    });
+router.get('/announcements', requireJwt, async (req, res) => {
+  return withClassroomClient(req, res, async (classroom) => {
+    const pageSize = parsePageSize(req.query.pageSize, 10);
+    const coursesRes = await classroom.courses.list({ courseStates: ['ACTIVE'], pageSize: 100 });
+    const courses = (coursesRes.data.courses || []).map(normalizeCourse);
 
-    const classroom = google.classroom({ version: 'v1', auth: oauth2Client });
+    const streamByCourse = await Promise.all(courses.map(async (course) => {
+      const [annRes, workRes, matRes] = await Promise.all([
+        classroom.courses.announcements.list({ courseId: course.id, pageSize }).catch(() => ({ data: { announcements: [] } })),
+        classroom.courses.courseWork.list({ courseId: course.id, pageSize }).catch(() => ({ data: { courseWork: [] } })),
+        classroom.courses.courseWorkMaterials.list({ courseId: course.id, pageSize }).catch(() => ({ data: { courseWorkMaterial: [] } })),
+      ]);
 
-    // 1. コース一覧を取得
-    console.log(`[Classroom] Fetching courses for user ${user._id}`);
-    const coursesRes = await classroom.courses.list({
-      courseStates: ['ACTIVE']
-    });
-    const courses = coursesRes.data.courses || [];
-    console.log(`[Classroom] Found ${courses.length} active courses`);
+      const announcements = (annRes.data.announcements || []).map((item) => normalizeAnnouncement(item, course));
+      const courseWorks = (workRes.data.courseWork || []).map((item) => normalizeCourseWork(item, course));
+      const materials = (matRes.data.courseWorkMaterial || []).map((item) => normalizeMaterial(item, course));
+      return [...announcements, ...courseWorks, ...materials];
+    }));
 
-    // 2. 各コースのコンテンツを取得（並列処理）
-    const contentPromises = courses.map(async (course) => {
-      try {
-        console.log(`[Classroom] Fetching content for course: ${course.name} (${course.id})`);
-        // アナウンスメント、課題、資料を並列で取得
-        const [announceRes, courseWorkRes, materialsRes] = await Promise.all([
-          classroom.courses.announcements.list({ courseId: course.id, pageSize: 5 }).catch(e => { console.error(`[Classroom] Announce Error (${course.name}):`, e.message); return { data: {} }; }),
-          classroom.courses.courseWork.list({ courseId: course.id, pageSize: 5 }).catch(e => { console.error(`[Classroom] CourseWork Error (${course.name}):`, e.message); return { data: {} }; }),
-          classroom.courses.courseWorkMaterials.list({ courseId: course.id, pageSize: 5 }).catch(e => { console.error(`[Classroom] Materials Error (${course.name}):`, e.message); return { data: {} }; }),
-        ]);
+    const allItems = streamByCourse
+      .flat()
+      .sort((a, b) => toDateValue(b.updateTime || b.creationTime || b.dueAt) - toDateValue(a.updateTime || a.creationTime || a.dueAt));
 
-        const announcements = (announceRes.data.announcements || []).map(item => ({
+    return res.json(allItems);
+  });
+});
+
+router.get('/todo', requireJwt, async (req, res) => {
+  return withClassroomClient(req, res, async (classroom) => {
+    const pageSize = parsePageSize(req.query.pageSize, 50);
+
+    const coursesRes = await classroom.courses.list({ courseStates: ['ACTIVE'], pageSize: 100 });
+    const courses = (coursesRes.data.courses || []).map(normalizeCourse);
+
+    const courseTasks = await Promise.all(courses.map(async (course) => {
+      const workRes = await classroom.courses.courseWork.list({ courseId: course.id, pageSize }).catch(() => ({ data: { courseWork: [] } }));
+      const works = workRes.data.courseWork || [];
+
+      const normalized = await Promise.all(works.map(async (item) => {
+        let submissionState = null;
+        try {
+          const subRes = await classroom.courses.courseWork.studentSubmissions.list({
+            courseId: course.id,
+            courseWorkId: item.id,
+            userId: 'me',
+            pageSize: 1,
+          });
+          submissionState = subRes.data.studentSubmissions?.[0]?.state || null;
+        } catch (_) {
+          submissionState = null;
+        }
+
+        return normalizeCourseWork(item, course, '', submissionState);
+      }));
+
+      return normalized;
+    }));
+
+    const now = Date.now();
+    const todoItems = courseTasks
+      .flat()
+      .filter((item) => item.type === 'coursework')
+      .map((item) => {
+        const dueAtTs = toDateValue(item.dueAt);
+        const turnedIn = item.submissionState === 'TURNED_IN' || item.submissionState === 'RETURNED';
+        const missing = dueAtTs > 0 && dueAtTs < now && !turnedIn;
+        const pending = !turnedIn;
+
+        return {
           ...item,
-          courseName: course.name,
-          courseLink: course.alternateLink,
-          type: 'classroom_announcement',
-          displayTitle: '[Classroom: アナウンスメント]',
-          displayText: item.text,
-        }));
+          turnedIn,
+          pending,
+          missing,
+        };
+      })
+      .filter((item) => item.pending)
+      .sort((a, b) => {
+        const aDue = toDateValue(a.dueAt);
+        const bDue = toDateValue(b.dueAt);
 
-        const courseWork = (courseWorkRes.data.courseWork || []).map(item => ({
-          ...item,
-          courseName: course.name,
-          courseLink: course.alternateLink,
-          type: 'classroom_coursework',
-          displayTitle: '[Classroom: 課題]',
-          displayText: `${item.title}${item.description ? '\n\n' + item.description : ''}`,
-          materials: item.materials || []
-        }));
+        if (!aDue && !bDue) {
+          return toDateValue(b.updateTime || b.creationTime) - toDateValue(a.updateTime || a.creationTime);
+        }
+        if (!aDue) return 1;
+        if (!bDue) return -1;
+        return aDue - bDue;
+      });
 
-        const materials = (materialsRes.data.courseWorkMaterial || []).map(item => ({
-          ...item,
-          courseName: course.name,
-          courseLink: course.alternateLink,
-          type: 'classroom_material',
-          displayTitle: '[Classroom: 資料]',
-          displayText: `${item.title}${item.description ? '\n\n' + item.description : ''}`,
-          materials: item.materials || []
-        }));
-
-        console.log(`[Classroom] Course ${course.name}: ${announcements.length} announcements, ${courseWork.length} coursework, ${materials.length} materials`);
-        return [...announcements, ...courseWork, ...materials];
-      } catch (err) {
-        console.error(`[Classroom] Critical error for course ${course.id}:`, err.message);
-        return [];
-      }
-    });
-
-    const results = await Promise.all(contentPromises);
-    const allItems = results.flat();
-    console.log(`[Classroom] Total items fetched: ${allItems.length}`);
-
-    // 3. 日付順にソート（新しい順）
-    allItems.sort((a, b) => {
-      const dateA = new Date(a.updateTime || a.creationTime || a.createdAt);
-      const dateB = new Date(b.updateTime || b.creationTime || b.createdAt);
-      return dateB - dateA;
-    });
-
-    res.json(allItems);
-
-  } catch (error) {
-    console.error('Failed to fetch announcements:', error);
-    res.status(500).json({ message: 'アナウンスメントの取得に失敗しました。' });
-  }
+    return res.json(todoItems);
+  });
 });
 
 module.exports = router;
