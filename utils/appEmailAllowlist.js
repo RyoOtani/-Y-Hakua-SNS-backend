@@ -22,6 +22,12 @@ const parseEmailAllowlist = (value) => (
     .filter((email) => email.includes('@'))
 );
 
+const parseEmailBlocklist = (value) => (
+  parseCsv(value)
+    .map((email) => normalizeEmail(email))
+    .filter((email) => email.includes('@'))
+);
+
 const parseEmailDomainAllowlist = (value) => (
   parseCsv(value)
     .map((entry) => normalizeDomain(entry))
@@ -41,6 +47,8 @@ const getAppEmailDomainAllowlistSet = () => {
     ...compatibilityDomainEntries,
   ].filter(Boolean));
 };
+
+const getAppEmailBlocklistSet = () => new Set(parseEmailBlocklist(process.env.APP_EMAIL_BLOCKLIST));
 
 const isEmailDomainAllowed = (email, domainAllowlist) => {
   const atIndex = email.lastIndexOf('@');
@@ -81,13 +89,23 @@ const isAppEmailAllowed = (email) => {
   return isEmailDomainAllowed(normalized, domainAllowlist);
 };
 
+const isAppEmailBlocked = (email) => {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return false;
+
+  return getAppEmailBlocklistSet().has(normalized);
+};
+
 module.exports = {
   normalizeEmail,
   normalizeDomain,
   parseEmailAllowlist,
+  parseEmailBlocklist,
   parseEmailDomainAllowlist,
   getAppEmailAllowlistSet,
   getAppEmailDomainAllowlistSet,
+  getAppEmailBlocklistSet,
   isAppEmailRestrictionEnabled,
   isAppEmailAllowed,
+  isAppEmailBlocked,
 };

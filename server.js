@@ -15,6 +15,8 @@ const redisClient = require('./redisClient');
 const User = require('./models/User');
 const Conversation = require('./models/Conversation');
 const { isAppEmailAllowed } = require('./utils/appEmailAllowlist');
+const { isEmailBlocked } = require('./utils/emailBlock');
+const { getActiveTemporaryBan } = require('./utils/temporaryBan');
 const { initializeFirebaseAdmin } = require('./utils/firebaseAdmin');
 const { startBatchedNotificationScheduler } = require('./utils/pushNotification');
 const { startWeeklyLearningBadgeScheduler } = require('./utils/learningBadge');
@@ -106,9 +108,18 @@ io.use(async (socket, next) => {
       return next(new Error('Unauthorized: invalid token payload'));
     }
 
-    const user = await User.findById(userId).select('email');
+    const user = await User.findById(userId).select('email emailBlockActive temporaryBanUntil temporaryBanReason');
     if (!user) {
       return next(new Error('Unauthorized: user not found'));
+    }
+
+    if (isEmailBlocked({ user })) {
+      console.warn('[socket] blocked email denied', {
+        userId,
+        email: user.email || null,
+        at: new Date().toISOString(),
+      });
+      return next(new Error('Unauthorized: account blocked'));
     }
 
     if (!isAppEmailAllowed(user.email)) {
@@ -118,6 +129,17 @@ io.use(async (socket, next) => {
         at: new Date().toISOString(),
       });
       return next(new Error('Unauthorized: email not allowlisted'));
+    }
+
+    const temporaryBan = getActiveTemporaryBan(user);
+    if (temporaryBan) {
+      console.warn('[socket] temporary ban denied', {
+        userId,
+        email: user.email || null,
+        temporaryBanUntil: temporaryBan.untilIso,
+        at: new Date().toISOString(),
+      });
+      return next(new Error('Unauthorized: account temporarily banned'));
     }
 
     socket.data.userId = userId;

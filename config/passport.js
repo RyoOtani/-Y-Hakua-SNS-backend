@@ -98,6 +98,8 @@ const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const User = require('../models/User');
 const { encrypt } = require('../utils/crypto');
 const { isAppEmailAllowed } = require('../utils/appEmailAllowlist');
+const { getActiveTemporaryBan, TEMPORARY_BAN_CODE } = require('../utils/temporaryBan');
+const { EMAIL_BLOCKED_CODE, isEmailBlocked } = require('../utils/emailBlock');
 
 passport.use(
   new GoogleStrategy(
@@ -124,6 +126,13 @@ passport.use(
       try {
         const email = profile.emails[0].value;
         const displayName = profile.displayName || email.split('@')[0];
+
+        if (isEmailBlocked({ email })) {
+          return done(null, false, {
+            message: 'email_blocked',
+            email,
+          });
+        }
 
         if (!isAppEmailAllowed(email)) {
           return done(null, false, {
@@ -182,6 +191,14 @@ passport.use(
             await user.save();
           }
         }
+
+        if (isEmailBlocked({ user, email: user?.email || email })) {
+          return done(null, false, {
+            message: 'email_blocked',
+            email: user?.email || email,
+          });
+        }
+
         return done(null, user);
       } catch (error) {
         console.error(`[GoogleStrategy] Error for user ${profile.id}:`, error);
@@ -234,19 +251,44 @@ passport.use(
   new JwtStrategy(jwtOptions, async (jwt_payload, done) => {
     try {
       const user = await User.findById(jwt_payload.id);
-      if (user && isAppEmailAllowed(user.email)) {
-        return done(null, user);
+      if (!user) {
+        return done(null, false, { code: 'USER_NOT_FOUND' });
       }
 
-      if (user && !isAppEmailAllowed(user.email)) {
+      if (isEmailBlocked({ user })) {
+        console.warn('[JWT] blocked email denied', {
+          userId: user._id ? String(user._id) : null,
+          email: user.email || null,
+          at: new Date().toISOString(),
+        });
+        return done(null, false, { code: EMAIL_BLOCKED_CODE });
+      }
+
+      if (!isAppEmailAllowed(user.email)) {
         console.warn('[JWT] allowlist denied', {
           userId: user._id ? String(user._id) : null,
           email: user.email || null,
           at: new Date().toISOString(),
         });
+        return done(null, false, { code: 'ALLOWLIST_DENIED' });
       }
 
-      return done(null, false);
+      const temporaryBan = getActiveTemporaryBan(user);
+      if (temporaryBan) {
+        console.warn('[JWT] temporary ban denied', {
+          userId: user._id ? String(user._id) : null,
+          email: user.email || null,
+          temporaryBanUntil: temporaryBan.untilIso,
+          at: new Date().toISOString(),
+        });
+        return done(null, false, {
+          code: TEMPORARY_BAN_CODE,
+          temporaryBanUntil: temporaryBan.untilIso,
+          temporaryBanReason: temporaryBan.reason,
+        });
+      }
+
+      return done(null, user);
     } catch (error) {
       return done(error, false);
     }

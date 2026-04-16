@@ -8,6 +8,16 @@ const jwksClient = require('jwks-rsa');
 const router = express.Router();
 const User = require("../models/User");
 const { isAppEmailAllowed } = require('../utils/appEmailAllowlist');
+const {
+  getActiveTemporaryBan,
+  buildTemporaryBanResponse,
+  TEMPORARY_BAN_LOGIN_ERROR,
+} = require('../utils/temporaryBan');
+const {
+  EMAIL_BLOCKED_CODE,
+  EMAIL_BLOCKED_MESSAGE,
+  isEmailBlocked,
+} = require('../utils/emailBlock');
 
 // Apple JWKS client for verifying Sign in with Apple tokens
 const appleJwksClient = jwksClient({
@@ -100,6 +110,43 @@ const logAllowlistDenied = ({ method, email, clientApp = null }) => {
   });
 };
 
+const logEmailBlocked = ({ method, email, clientApp = null }) => {
+  console.warn(`[Auth] blocked email denied method=${method}`, {
+    email: normalizeEmail(email),
+    clientApp: normalizeClientApp(clientApp),
+    at: new Date().toISOString(),
+  });
+};
+
+const buildTemporaryBanRedirectUrl = (frontendUrl, temporaryBan) => {
+  const normalizedFrontendUrl = String(frontendUrl || '').replace(/\/$/, '');
+  const params = new URLSearchParams({
+    error: TEMPORARY_BAN_LOGIN_ERROR,
+  });
+  if (temporaryBan?.untilIso) {
+    params.set('until', temporaryBan.untilIso);
+  }
+  if (temporaryBan?.reason) {
+    params.set('reason', temporaryBan.reason);
+  }
+
+  return `${normalizedFrontendUrl}/login?${params.toString()}`;
+};
+
+const logTemporaryBanDenied = ({ method, user, clientApp = null, extra = {}, temporaryBan }) => {
+  const username = getUsernameForLog(user);
+  const usernameLabel = formatUsernameForClientAppLog(username, clientApp);
+  console.warn(`[Auth] temporary ban denied method=${method} username： ${usernameLabel}`, {
+    userId: user?._id ? String(user._id) : null,
+    email: user?.email || null,
+    clientApp: normalizeClientApp(clientApp),
+    temporaryBanUntil: temporaryBan?.untilIso || null,
+    temporaryBanReason: temporaryBan?.reason || null,
+    ...extra,
+    at: new Date().toISOString(),
+  });
+};
+
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 
 const PRIVILEGED_EMAIL_ALLOWLIST = new Set(
@@ -160,6 +207,10 @@ router.post("/register", authLimiter, async (req, res) => {
     if (username.length < 2 || username.length > 30) {
       return res.status(400).json({ error: 'ユーザー名は2〜30文字にしてください' });
     }
+    if (isEmailBlocked({ email })) {
+      logEmailBlocked({ method: 'register', email });
+      return res.status(403).json({ error: EMAIL_BLOCKED_MESSAGE, code: EMAIL_BLOCKED_CODE });
+    }
     if (!isAppEmailAllowed(email)) {
       logAllowlistDenied({ method: 'register', email });
       return res.status(403).json({ error: APP_EMAIL_DENIED_MESSAGE });
@@ -203,6 +254,10 @@ router.post("/login", authLimiter, async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) return authFailed();
+    if (isEmailBlocked({ user, email: user.email || email })) {
+      logEmailBlocked({ method: 'password', email: user.email || email, clientApp });
+      return res.status(403).json({ error: EMAIL_BLOCKED_MESSAGE, code: EMAIL_BLOCKED_CODE });
+    }
     if (!isAppEmailAllowed(user.email || email)) {
       logAllowlistDenied({ method: 'password', email: user.email || email, clientApp });
       return res.status(403).json({ error: APP_EMAIL_DENIED_MESSAGE });
@@ -215,6 +270,12 @@ router.post("/login", authLimiter, async (req, res) => {
 
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) return authFailed();
+
+    const temporaryBan = getActiveTemporaryBan(user);
+    if (temporaryBan) {
+      logTemporaryBanDenied({ method: 'password', user, clientApp, temporaryBan });
+      return res.status(403).json(buildTemporaryBanResponse(temporaryBan));
+    }
 
     const token = jwt.sign(
       { id: user._id, email: user.email },
@@ -310,6 +371,11 @@ router.get(
     passport.authenticate('google', (err, user, info) => {
       const frontendUrl = process.env.FRONTEND_URL || '';
 
+      if (!err && !user && info?.message === 'email_blocked') {
+        logEmailBlocked({ method: 'google', email: info?.email, clientApp: req._oauthClientApp });
+        return res.redirect(`${frontendUrl}/login?error=email_blocked`);
+      }
+
       if (!err && !user && info?.message === 'allowlist_denied') {
         logAllowlistDenied({ method: 'google', email: info?.email, clientApp: req._oauthClientApp });
         return res.redirect(`${frontendUrl}/login?error=allowlist_denied`);
@@ -330,9 +396,28 @@ router.get(
   },
   async (req, res) => {
     try {
+      if (isEmailBlocked({ user: req.user })) {
+        logEmailBlocked({ method: 'google', email: req.user?.email, clientApp: req._oauthClientApp });
+        return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=email_blocked`);
+      }
+
       if (!isAppEmailAllowed(req.user?.email)) {
         logAllowlistDenied({ method: 'google', email: req.user?.email, clientApp: req._oauthClientApp });
         return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=allowlist_denied`);
+      }
+
+      const temporaryBan = getActiveTemporaryBan(req.user);
+      if (temporaryBan) {
+        logTemporaryBanDenied({
+          method: 'google',
+          user: req.user,
+          clientApp: req._oauthClientApp,
+          extra: { platform: req._oauthPlatform || 'web' },
+          temporaryBan,
+        });
+        return res.redirect(
+          buildTemporaryBanRedirectUrl(process.env.FRONTEND_URL || '', temporaryBan)
+        );
       }
 
       await syncElevatedAccessByEmailAllowlist(req.user);
@@ -475,6 +560,11 @@ router.post('/apple', authLimiter, async (req, res) => {
     // Appleは初回以外 email を返さないことがあるためフォールバックを用意
     const email = payload.email || clientEmail || `${appleId}@appleid.apple.com`;
 
+    if (isEmailBlocked({ email })) {
+      logEmailBlocked({ method: 'apple-native', email, clientApp });
+      return res.status(403).json({ error: EMAIL_BLOCKED_MESSAGE, code: EMAIL_BLOCKED_CODE });
+    }
+
     // 3. appleId でユーザー検索
     let user = await User.findOne({ appleId });
 
@@ -526,6 +616,17 @@ router.post('/apple', authLimiter, async (req, res) => {
         await user.save();
         console.log('[Auth] Apple new user created', { userId: user._id, email });
       }
+    }
+
+    if (isEmailBlocked({ user, email })) {
+      logEmailBlocked({ method: 'apple-native', email: user?.email || email, clientApp });
+      return res.status(403).json({ error: EMAIL_BLOCKED_MESSAGE, code: EMAIL_BLOCKED_CODE });
+    }
+
+    const temporaryBan = getActiveTemporaryBan(user);
+    if (temporaryBan) {
+      logTemporaryBanDenied({ method: 'apple-native', user, clientApp, temporaryBan });
+      return res.status(403).json(buildTemporaryBanResponse(temporaryBan));
     }
 
     // JWT 発行
@@ -608,6 +709,11 @@ router.post('/apple/callback', async (req, res) => {
         const email = payload.email;
         const fullName = userData?.name;
 
+        if (email && isEmailBlocked({ email })) {
+          logEmailBlocked({ method: 'apple-browser', email, clientApp: oauthClientApp });
+          return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=email_blocked`);
+        }
+
         // 3. appleId でユーザー検索
         let user = await User.findOne({ appleId });
 
@@ -662,6 +768,25 @@ router.post('/apple/callback', async (req, res) => {
           }
         } else {
           return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=no_email`);
+        }
+
+        if (isEmailBlocked({ user, email: user?.email || email })) {
+          logEmailBlocked({ method: 'apple-browser', email: user?.email || email, clientApp: oauthClientApp });
+          return res.redirect(`${process.env.FRONTEND_URL || ''}/login?error=email_blocked`);
+        }
+
+        const temporaryBan = getActiveTemporaryBan(user);
+        if (temporaryBan) {
+          logTemporaryBanDenied({
+            method: 'apple-browser',
+            user,
+            clientApp: oauthClientApp,
+            extra: { platform: oauthPlatform || 'web' },
+            temporaryBan,
+          });
+          return res.redirect(
+            buildTemporaryBanRedirectUrl(process.env.FRONTEND_URL || '', temporaryBan)
+          );
         }
 
         // JWT 発行

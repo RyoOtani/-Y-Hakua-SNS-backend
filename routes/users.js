@@ -2,11 +2,21 @@ const router = require("express").Router();
 const User = require("../models/User");
 const Notification = require("../models/Notification");
 const mongoose = require("mongoose");
-const passport = require("passport");
 const redisClient = require("../redisClient");
-const { authenticate } = require("../middleware/auth");
+const { authenticate, requireElevatedAccess } = require("../middleware/auth");
 const { sendPushToUser } = require("../utils/pushNotification");
 const { getActiveLearningRankingBadge } = require('../utils/learningBadge');
+const {
+  getActiveTemporaryBan,
+  normalizeTemporaryBanReason,
+} = require('../utils/temporaryBan');
+const {
+  getEmailBlockState,
+  normalizeEmailBlockReason,
+} = require('../utils/emailBlock');
+
+const MAX_TEMP_BAN_DURATION_MINUTES = 60 * 24 * 30;
+const MAX_TEMP_BAN_REASON_LENGTH = 200;
 
 const normalizeObjectIdList = (input) => {
   const values = Array.isArray(input) ? input : [input];
@@ -48,6 +58,71 @@ const normalizeObjectIdList = (input) => {
   return Array.from(uniq);
 };
 
+const parseTemporaryBanUntil = (body = {}) => {
+  const clearRequested = body.clear === true || body.banUntil === null;
+  if (clearRequested) {
+    return { clear: true, until: null };
+  }
+
+  if (body.durationMinutes !== undefined && body.durationMinutes !== null && body.durationMinutes !== '') {
+    const minutes = Number.parseInt(body.durationMinutes, 10);
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      return { error: 'durationMinutes は1以上の整数で指定してください。' };
+    }
+    if (minutes > MAX_TEMP_BAN_DURATION_MINUTES) {
+      return {
+        error: `durationMinutes は最大 ${MAX_TEMP_BAN_DURATION_MINUTES} 分まで指定できます。`,
+      };
+    }
+
+    return {
+      clear: false,
+      until: new Date(Date.now() + minutes * 60 * 1000),
+    };
+  }
+
+  if (body.banUntil === undefined || body.banUntil === '') {
+    return {
+      error: 'banUntil または durationMinutes を指定してください。解除する場合は clear=true を指定してください。',
+    };
+  }
+
+  const parsedUntil = new Date(body.banUntil);
+  if (!Number.isFinite(parsedUntil.getTime())) {
+    return { error: 'banUntil は有効な日時(ISO8601)で指定してください。' };
+  }
+  if (parsedUntil.getTime() <= Date.now()) {
+    return { error: 'banUntil は現在時刻より未来を指定してください。' };
+  }
+
+  return { clear: false, until: parsedUntil };
+};
+
+const buildModerationState = (user) => {
+  const activeBan = getActiveTemporaryBan(user);
+  const emailBlockState = getEmailBlockState(user);
+
+  return {
+    userId: user?._id ? String(user._id) : null,
+    username: user?.username || null,
+    email: user?.email || null,
+    temporaryBan: activeBan
+      ? {
+          active: true,
+          until: activeBan.untilIso,
+          reason: activeBan.reason,
+          bannedBy: user?.temporaryBannedBy ? String(user.temporaryBannedBy) : null,
+        }
+      : {
+          active: false,
+          until: null,
+          reason: null,
+          bannedBy: null,
+        },
+    emailBlock: emailBlockState,
+  };
+};
+
 // 機密フィールドを除外するヘルパー
 const sanitizeUser = (user) => {
   if (!user) return null;
@@ -72,6 +147,13 @@ const sanitizeUser = (user) => {
     lockReason,
     lockedAt,
     requiresReauth,
+    temporaryBanUntil,
+    temporaryBanReason,
+    temporaryBannedBy,
+    emailBlockActive,
+    emailBlockReason,
+    emailBlockedBy,
+    emailBlockedAt,
     updatedAt,
     __v,
     ...safe
@@ -118,6 +200,28 @@ router.put("/:id", authenticate, async (req, res) => {
   }
 });
 
+// 管理者向け: モデレーション状態取得
+router.get('/:id/moderation', authenticate, requireElevatedAccess, async (req, res) => {
+  const targetUserId = String(req.params.id || '');
+  if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
+    return res.status(400).json({ error: '無効なユーザーIDです。' });
+  }
+
+  try {
+    const user = await User.findById(targetUserId)
+      .select('_id username email temporaryBanUntil temporaryBanReason temporaryBannedBy emailBlockActive emailBlockReason emailBlockedBy emailBlockedAt');
+
+    if (!user) {
+      return res.status(404).json({ error: 'ユーザーが見つかりません。' });
+    }
+
+    return res.status(200).json(buildModerationState(user));
+  } catch (err) {
+    console.error('Moderation state fetch error:', err);
+    return res.status(500).json({ error: 'モデレーション状態の取得に失敗しました。' });
+  }
+});
+
 //ユーザー情報の削除（認証必須）
 router.delete("/:id", authenticate, async (req, res) => {
   if (req.user._id.toString() !== req.params.id) {
@@ -159,7 +263,7 @@ router.get("/:id/settings", async (req, res) => {
 });
 
 // ユーザー設定の更新
-router.put("/:id/settings", passport.authenticate('jwt', { session: false }), async (req, res) => {
+router.put("/:id/settings", authenticate, async (req, res) => {
   // 認証されたユーザーのIDとリクエストパラメータのIDが一致するか確認
   if (req.user._id.toString() !== req.params.id) {
     return res.status(403).json("自分のアカウントの設定のみ更新できます。");
@@ -178,6 +282,126 @@ router.put("/:id/settings", passport.authenticate('jwt', { session: false }), as
   } catch (err) {
     console.error("Settings Update Error:", err);
     res.status(500).json(err);
+  }
+});
+
+// 管理者による一時BANの設定/解除
+router.patch('/:id/temporary-ban', authenticate, requireElevatedAccess, async (req, res) => {
+  const targetUserId = String(req.params.id || '');
+  if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
+    return res.status(400).json({ error: '無効なユーザーIDです。' });
+  }
+
+  const parsedBan = parseTemporaryBanUntil(req.body);
+  if (parsedBan.error) {
+    return res.status(400).json({ error: parsedBan.error });
+  }
+
+  if (!parsedBan.clear && req.user._id.toString() === targetUserId) {
+    return res.status(400).json({ error: '自分自身に一時BANは設定できません。' });
+  }
+
+  const reasonInput = normalizeTemporaryBanReason(req.body?.reason);
+  const reason = reasonInput ? reasonInput.slice(0, MAX_TEMP_BAN_REASON_LENGTH) : null;
+
+  const updateSet = {};
+  const updateUnset = {};
+
+  if (parsedBan.clear) {
+    updateUnset.temporaryBanUntil = '';
+    updateUnset.temporaryBanReason = '';
+    updateUnset.temporaryBannedBy = '';
+  } else {
+    updateSet.temporaryBanUntil = parsedBan.until;
+    updateSet.temporaryBannedBy = req.user._id;
+    if (reason) {
+      updateSet.temporaryBanReason = reason;
+    } else {
+      updateUnset.temporaryBanReason = '';
+    }
+  }
+
+  const update = {};
+  if (Object.keys(updateSet).length > 0) {
+    update.$set = updateSet;
+  }
+  if (Object.keys(updateUnset).length > 0) {
+    update.$unset = updateUnset;
+  }
+
+  try {
+    const updatedUser = await User.findByIdAndUpdate(targetUserId, update, { new: true })
+      .select('_id username email temporaryBanUntil temporaryBanReason temporaryBannedBy emailBlockActive emailBlockReason emailBlockedBy emailBlockedAt');
+
+    if (!updatedUser) {
+      return res.status(404).json({ error: 'ユーザーが見つかりません。' });
+    }
+
+    return res.status(200).json(buildModerationState(updatedUser));
+  } catch (err) {
+    console.error('Temporary ban update error:', err);
+    return res.status(500).json({ error: '一時BANの更新に失敗しました。' });
+  }
+});
+
+// 管理者によるメールブロック設定/解除（永続）
+router.patch('/:id/email-block', authenticate, requireElevatedAccess, async (req, res) => {
+  const targetUserId = String(req.params.id || '');
+  if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
+    return res.status(400).json({ error: '無効なユーザーIDです。' });
+  }
+
+  const blocked = req.body?.blocked;
+  if (typeof blocked !== 'boolean') {
+    return res.status(400).json({ error: 'blocked は true または false を指定してください。' });
+  }
+
+  if (blocked && req.user._id.toString() === targetUserId) {
+    return res.status(400).json({ error: '自分自身をメールブロックすることはできません。' });
+  }
+
+  const reasonInput = normalizeEmailBlockReason(req.body?.reason);
+  const reason = reasonInput ? reasonInput.slice(0, MAX_TEMP_BAN_REASON_LENGTH) : null;
+
+  const updateSet = {};
+  const updateUnset = {};
+
+  if (blocked) {
+    updateSet.emailBlockActive = true;
+    updateSet.emailBlockedBy = req.user._id;
+    updateSet.emailBlockedAt = new Date();
+    if (reason) {
+      updateSet.emailBlockReason = reason;
+    } else {
+      updateUnset.emailBlockReason = '';
+    }
+  } else {
+    updateSet.emailBlockActive = false;
+    updateUnset.emailBlockReason = '';
+    updateUnset.emailBlockedBy = '';
+    updateUnset.emailBlockedAt = '';
+  }
+
+  const update = {};
+  if (Object.keys(updateSet).length > 0) {
+    update.$set = updateSet;
+  }
+  if (Object.keys(updateUnset).length > 0) {
+    update.$unset = updateUnset;
+  }
+
+  try {
+    const updatedUser = await User.findByIdAndUpdate(targetUserId, update, { new: true })
+      .select('_id username email temporaryBanUntil temporaryBanReason temporaryBannedBy emailBlockActive emailBlockReason emailBlockedBy emailBlockedAt');
+
+    if (!updatedUser) {
+      return res.status(404).json({ error: 'ユーザーが見つかりません。' });
+    }
+
+    return res.status(200).json(buildModerationState(updatedUser));
+  } catch (err) {
+    console.error('Email block update error:', err);
+    return res.status(500).json({ error: 'メールブロック更新に失敗しました。' });
   }
 });
 
@@ -638,7 +862,7 @@ router.get('/recommendations', authenticate, async (req, res) => {
 });
 
 // Google認証によるユーザー情報の取得
-router.get("/me", passport.authenticate('jwt', { session: false }), (req, res) => {
+router.get("/me", authenticate, (req, res) => {
   // パスワードを除いてユーザー情報を返す
   const {
     password,
@@ -831,7 +1055,7 @@ router.get("/followers/:userId", async (req, res) => {
 });
 
 // プライバシーポリシー
-router.put("/:id/agree-privacy", passport.authenticate('jwt', { session: false }), async (req, res) => {
+router.put("/:id/agree-privacy", authenticate, async (req, res) => {
   if (req.user._id.toString() !== req.params.id) {
     return res.status(403).json("自分のアカウントのみ更新できます。");
   }

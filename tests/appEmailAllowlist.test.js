@@ -5,13 +5,16 @@ const {
   normalizeEmail,
   normalizeDomain,
   parseEmailAllowlist,
+  parseEmailBlocklist,
   parseEmailDomainAllowlist,
   isAppEmailRestrictionEnabled,
   isAppEmailAllowed,
+  isAppEmailBlocked,
 } = require('../utils/appEmailAllowlist');
 
 const originalAllowlist = process.env.APP_EMAIL_ALLOWLIST;
 const originalDomainAllowlist = process.env.APP_EMAIL_DOMAIN_ALLOWLIST;
+const originalBlocklist = process.env.APP_EMAIL_BLOCKLIST;
 
 test.after(() => {
   if (typeof originalAllowlist === 'undefined') {
@@ -24,6 +27,12 @@ test.after(() => {
     delete process.env.APP_EMAIL_DOMAIN_ALLOWLIST;
   } else {
     process.env.APP_EMAIL_DOMAIN_ALLOWLIST = originalDomainAllowlist;
+  }
+
+  if (typeof originalBlocklist === 'undefined') {
+    delete process.env.APP_EMAIL_BLOCKLIST;
+  } else {
+    process.env.APP_EMAIL_BLOCKLIST = originalBlocklist;
   }
 });
 
@@ -46,6 +55,13 @@ test('parseEmailDomainAllowlist extracts valid domain entries', () => {
   assert.deepEqual(
     parseEmailDomainAllowlist(' @hitachi1-h.ibk.ed.jp, .school.jp '),
     ['hitachi1-h.ibk.ed.jp', 'school.jp']
+  );
+});
+
+test('parseEmailBlocklist extracts valid entries', () => {
+  assert.deepEqual(
+    parseEmailBlocklist(' blocked@example.com,invalid-domain, STOP@Example.com '),
+    ['blocked@example.com', 'stop@example.com']
   );
 });
 
@@ -83,4 +99,13 @@ test('isAppEmailAllowed supports both exact and domain entries together', () => 
   assert.equal(isAppEmailAllowed('admin@example.com'), true);
   assert.equal(isAppEmailAllowed('student@hitachi1-h.ibk.ed.jp'), true);
   assert.equal(isAppEmailAllowed('guest@example.com'), false);
+});
+
+test('isAppEmailBlocked matches exact email entries', () => {
+  process.env.APP_EMAIL_BLOCKLIST = 'blocked@example.com,stop@example.com';
+
+  assert.equal(isAppEmailBlocked('blocked@example.com'), true);
+  assert.equal(isAppEmailBlocked('STOP@EXAMPLE.COM'), true);
+  assert.equal(isAppEmailBlocked('other@example.com'), false);
+  assert.equal(isAppEmailBlocked(''), false);
 });

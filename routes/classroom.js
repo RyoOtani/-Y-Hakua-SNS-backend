@@ -1,10 +1,10 @@
 const router = require('express').Router();
 const { google } = require('googleapis');
 const User = require('../models/User');
-const passport = require('passport');
+const { authenticate } = require('../middleware/auth');
 const { decrypt, encrypt } = require('../utils/crypto');
 
-const requireJwt = passport.authenticate('jwt', { session: false });
+const requireJwt = authenticate;
 const MAX_PAGE_SIZE = 100;
 
 const parsePageSize = (value, fallback = 30) => {

@@ -186,6 +186,38 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    temporaryBanUntil: {
+      type: Date,
+      default: null,
+    },
+    temporaryBanReason: {
+      type: String,
+      max: 200,
+      default: null,
+    },
+    temporaryBannedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    emailBlockActive: {
+      type: Boolean,
+      default: false,
+    },
+    emailBlockReason: {
+      type: String,
+      max: 200,
+      default: null,
+    },
+    emailBlockedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    emailBlockedAt: {
+      type: Date,
+      default: null,
+    },
     notificationDeliveryMode: {
       type: String,
       enum: ['immediate', 'batched'],
