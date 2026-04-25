@@ -128,6 +128,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    classroomNotificationCursorAt: {
+      type: Date,
+      default: null,
+    },
     followers: [
       {
         type: mongoose.Schema.Types.ObjectId,

@@ -132,6 +132,7 @@ const sanitizeUser = (user) => {
     accessToken,
     refreshToken,
     fcmToken,
+    classroomNotificationCursorAt,
     blockedUsers,
     followers,
     following,

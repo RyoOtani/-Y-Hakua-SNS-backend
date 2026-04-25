@@ -19,6 +19,7 @@ const { isEmailBlocked } = require('./utils/emailBlock');
 const { getActiveTemporaryBan } = require('./utils/temporaryBan');
 const { initializeFirebaseAdmin } = require('./utils/firebaseAdmin');
 const { startBatchedNotificationScheduler } = require('./utils/pushNotification');
+const { startClassroomPushScheduler } = require('./utils/classroomPushScheduler');
 const { startWeeklyLearningBadgeScheduler } = require('./utils/learningBadge');
 const { toIdString, getConversationMemberIds } = require('./utils/socketAuthorization');
 const {
@@ -513,6 +514,7 @@ require('./config/passport');
 // Firebase Admin 初期化（未設定時は自動的に無効化）
 initializeFirebaseAdmin();
 startBatchedNotificationScheduler();
+startClassroomPushScheduler();
 startWeeklyLearningBadgeScheduler();
 
 // プライバシーポリシーページ（認証不要の公開ページ）
