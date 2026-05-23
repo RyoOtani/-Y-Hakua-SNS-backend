@@ -119,6 +119,19 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// 簡易ヘルスチェック（ロードバランサ／プローブ用）
+app.get('/health', (req, res) => {
+  try {
+    const mongoState = mongoose.connection.readyState; // 1 = connected
+    if (mongoState === 1) {
+      return res.status(200).json({ status: 'ok', mongoState });
+    }
+    return res.status(500).json({ status: 'error', mongoState });
+  } catch (err) {
+    return res.status(500).json({ status: 'error', error: String(err) });
+  }
+});
+
 // Serve static assets from the frontend's public directory
 app.use(express.static('../frontEnd/public'));
 
@@ -159,6 +172,7 @@ app.use('/api/conversations', require('./routes/conversation'));
 app.use('/api/messages', require('./routes/message'));
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/hashtags', require('./routes/hashtag'));
+app.use('/api/communities', require('./routes/communities'));
 
 // サーバー起動
 const PORT = process.env.PORT || 8800;

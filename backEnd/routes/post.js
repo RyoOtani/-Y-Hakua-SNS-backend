@@ -4,11 +4,26 @@ const User = require("../models/User");
 const Comment = require("../models/Comment");
 const Notification = require("../models/Notification");
 const { saveHashtags } = require("./hashtag");
+const Community = require("../models/Community");
+
+const normalizePostMode = (body) => {
+  if (body && body.communityId) return "community";
+  // クライアントによっては `isAnonymous` ではなく `postMode` を送る場合があるため両方を確認
+  if (body && (body.isAnonymous || String(body.postMode) === 'anonymous')) return "anonymous";
+  return "public";
+};
 
 //create a post
 router.post("/", async (req, res) => {
-  const newPost = new Post(req.body);
   try {
+    const postMode = normalizePostMode(req.body);
+    const anonymousLabel = postMode === "anonymous" ? (req.body.anonymousLabel || "匿名") : "";
+    const newPost = new Post({
+      ...req.body,
+      postMode,
+      anonymousLabel,
+      visibility: req.body.visibility || (postMode === "community" ? "community" : "public"),
+    });
     const savedPost = await newPost.save();
 
     // Extract and save hashtags from the post description
@@ -33,6 +48,41 @@ router.post("/", async (req, res) => {
     return res.status(200).json(savedPost);
   } catch (err) {
     return res.status(500).json(err);
+  }
+});
+
+// 匿名フィード
+router.get("/timeline/anonymous", async (req, res) => {
+  try {
+    const anonymousPosts = await Post.find({ postMode: "anonymous" })
+      .populate("userId", "username profilePicture")
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    res.status(200).json(anonymousPosts);
+  } catch (err) {
+    console.error("Error in /timeline/anonymous:", err);
+    res.status(500).json(err);
+  }
+});
+
+// コミュニティ投稿一覧
+router.get("/community/:communityId", async (req, res) => {
+  try {
+    const community = await Community.findById(req.params.communityId);
+    if (!community) {
+      return res.status(404).json({ error: "コミュニティが見つかりません" });
+    }
+
+    const posts = await Post.find({ communityId: req.params.communityId })
+      .populate("userId", "username profilePicture")
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    res.status(200).json({ community, posts });
+  } catch (err) {
+    console.error("Error in /community/:communityId:", err);
+    res.status(500).json(err);
   }
 });
 
