@@ -15,6 +15,22 @@ const MessageSchema = new mongoose.Schema(
     text: {
       type: String,
     },
+    // 返信情報（元メッセージの簡易スナップショット）
+    replyTo: {
+      messageId: {
+        type: mongoose.Schema.Types.ObjectId,
+      },
+      text: {
+        type: String,
+      },
+      senderId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+      senderName: {
+        type: String,
+      },
+    },
     // 既読状態
     read: {
       type: Boolean,
@@ -39,6 +55,39 @@ const MessageSchema = new mongoose.Schema(
         },
       },
     ],
+    // メッセージリアクション（ユーザーごとに1つの絵文字）
+    reactions: [
+      {
+        userId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+          required: true,
+        },
+        emoji: {
+          type: String,
+          required: true,
+        },
+        reactedAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
+    moderationStatus: {
+      type: String,
+      enum: ["active", "hidden_by_reports"],
+      default: "active",
+    },
+    moderationSummary: {
+      reportedCount: {
+        type: Number,
+        default: 0,
+      },
+      lastReportedAt: {
+        type: Date,
+        default: null,
+      },
+    },
     // 論理削除用
     deletedAt: {
       type: Date,

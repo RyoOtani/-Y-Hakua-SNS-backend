@@ -24,7 +24,7 @@
 //     },
 //     // async (accessToken, refreshToken, profile, done) => {
 //     //   // ここが重要！Googleから戻ってきたタイミングで実行されます
-      
+
 //     //   try {
 //     //     // 1. すでにDBにいるか確認
 //     //     let user = await User.findOne({ googleId: profile.id });
@@ -42,7 +42,7 @@
 //     //         avatarUrl: profile.photos[0].value,
 //     //         // 必要に応じて role: 'STUDENT' などをここで設定
 //     //       });
-          
+
 //     //       await newUser.save();
 //     //       return done(null, newUser);
 //     //     }
@@ -96,53 +96,109 @@ require('dotenv').config();
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const User = require('../models/User');
+const { encrypt } = require('../utils/crypto');
+const { isAppEmailAllowed } = require('../utils/appEmailAllowlist');
+const { getActiveTemporaryBan, TEMPORARY_BAN_CODE } = require('../utils/temporaryBan');
+const { EMAIL_BLOCKED_CODE, isEmailBlocked } = require('../utils/emailBlock');
 
 passport.use(
   new GoogleStrategy(
     {
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: '/api/auth/google/callback',
+      callbackURL: process.env.GOOGLE_CALLBACK_URL || '/api/auth/google/callback',
       scope: [
+        "openid",
         "profile",
         "email",
         "https://www.googleapis.com/auth/classroom.courses.readonly",
+        "https://www.googleapis.com/auth/classroom.coursework.me.readonly",
+        "https://www.googleapis.com/auth/classroom.announcements.readonly",
+        "https://www.googleapis.com/auth/classroom.courseworkmaterials.readonly",
       ],
       accessType: 'offline',
       prompt: 'consent',
+      pkce: true,
+      state: true,
+      includeGrantedScopes: true,
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        console.log(`[GoogleStrategy] User ${profile.id} - refreshToken received from Google: ${refreshToken ? 'exists' : 'MISSING'}`);
+        const email = profile.emails[0].value;
+        const displayName = profile.displayName || email.split('@')[0];
 
+        if (isEmailBlocked({ email })) {
+          return done(null, false, {
+            message: 'email_blocked',
+            email,
+          });
+        }
+
+        if (!isAppEmailAllowed(email)) {
+          return done(null, false, {
+            message: 'allowlist_denied',
+            email,
+          });
+        }
+
+        // 1. まずgoogleIdで検索
         let user = await User.findOne({ googleId: profile.id });
 
         if (user) {
-          // User exists, update tokens and other profile info
-          user.username = profile.displayName || profile.emails[0].value.split('@')[0];
-          user.email = profile.emails[0].value;
+          // 既存のGoogleユーザー: プロフィール情報を更新
+          // usernameの更新時に他のユーザーとの重複を避ける
+          const existingWithName = await User.findOne({ username: displayName, _id: { $ne: user._id } });
+          if (!existingWithName) {
+            user.username = displayName;
+          }
+          user.email = email;
           user.profilePicture = profile.photos[0]?.value;
-          user.accessToken = accessToken;
-          // Only update refreshToken if a new one is provided by Google
-          // or if the existing one is missing.
+          user.accessToken = undefined;
           if (refreshToken) {
-            user.refreshToken = refreshToken;
+            user.refreshToken = encrypt(refreshToken);
           }
           await user.save();
-          console.log(`[GoogleStrategy] Existing user ${user.id} - refreshToken after save: ${user.refreshToken ? 'exists' : 'MISSING'}`);
         } else {
-          // New user, create them
-          user = new User({
-            username: profile.displayName || profile.emails[0].value.split('@')[0],
-            email: profile.emails[0].value,
-            googleId: profile.id,
-            profilePicture: profile.photos[0]?.value,
-            accessToken: accessToken,
-            refreshToken: refreshToken, // Save if provided on initial login
-          });
-          await user.save();
-          console.log(`[GoogleStrategy] New user ${user.id} - refreshToken after save: ${user.refreshToken ? 'exists' : 'MISSING'}`);
+          // 2. googleIdが見つからない場合、同じメールで既存ユーザーがいるかチェック
+          //    （メール/パスワードで登録済みのユーザーがGoogleログインした場合）
+          user = await User.findOne({ email });
+
+          if (user) {
+            // 既存のメール/パスワードユーザーにGoogleアカウントをリンク
+            user.googleId = profile.id;
+            user.profilePicture = user.profilePicture || profile.photos[0]?.value;
+            user.accessToken = undefined;
+            if (refreshToken) {
+              user.refreshToken = encrypt(refreshToken);
+            }
+            await user.save();
+          } else {
+            // 3. 完全に新規ユーザー: ユーザー名の重複を回避して作成
+            let username = displayName;
+            const existingWithName = await User.findOne({ username });
+            if (existingWithName) {
+              // 重複する場合はランダムサフィックスを付与
+              username = `${displayName}_${profile.id.slice(-5)}`;
+            }
+
+            user = new User({
+              username,
+              email,
+              googleId: profile.id,
+              profilePicture: profile.photos[0]?.value,
+              refreshToken: refreshToken ? encrypt(refreshToken) : undefined,
+            });
+            await user.save();
+          }
         }
+
+        if (isEmailBlocked({ user, email: user?.email || email })) {
+          return done(null, false, {
+            message: 'email_blocked',
+            email: user?.email || email,
+          });
+        }
+
         return done(null, user);
       } catch (error) {
         console.error(`[GoogleStrategy] Error for user ${profile.id}:`, error);
@@ -156,20 +212,83 @@ const { Strategy: JwtStrategy, ExtractJwt } = require('passport-jwt');
 
 // ... (existing GoogleStrategy code) ...
 
+const extractCookieValue = (cookieHeader, cookieName) => {
+  if (!cookieHeader || !cookieName) return null;
+  const escapedName = cookieName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(?:^|;\\s*)${escapedName}=([^;]+)`);
+  const match = cookieHeader.match(regex);
+  if (!match || !match[1]) return null;
+
+  try {
+    return decodeURIComponent(match[1]);
+  } catch (_) {
+    return match[1];
+  }
+};
+
+const cookieTokenExtractor = (req) => {
+  if (!req) return null;
+
+  if (req.cookies && typeof req.cookies.auth_token === 'string' && req.cookies.auth_token.trim()) {
+    return req.cookies.auth_token.trim();
+  }
+
+  return extractCookieValue(req.headers?.cookie || '', 'auth_token');
+};
+
 // JWT Strategy for protecting routes
 const jwtOptions = {
-  jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-  secretOrKey: process.env.JWT_SECRET || 'your-jwt-secret',
+  jwtFromRequest: ExtractJwt.fromExtractors([
+    ExtractJwt.fromAuthHeaderAsBearerToken(),
+    cookieTokenExtractor,
+  ]),
+  secretOrKey: process.env.JWT_SECRET,
+  issuer: process.env.JWT_ISSUER || 'hakua-sns',
+  audience: process.env.JWT_AUDIENCE || 'hakua-clients',
 };
 
 passport.use(
   new JwtStrategy(jwtOptions, async (jwt_payload, done) => {
     try {
       const user = await User.findById(jwt_payload.id);
-      if (user) {
-        return done(null, user);
+      if (!user) {
+        return done(null, false, { code: 'USER_NOT_FOUND' });
       }
-      return done(null, false);
+
+      if (isEmailBlocked({ user })) {
+        console.warn('[JWT] blocked email denied', {
+          userId: user._id ? String(user._id) : null,
+          email: user.email || null,
+          at: new Date().toISOString(),
+        });
+        return done(null, false, { code: EMAIL_BLOCKED_CODE });
+      }
+
+      if (!isAppEmailAllowed(user.email)) {
+        console.warn('[JWT] allowlist denied', {
+          userId: user._id ? String(user._id) : null,
+          email: user.email || null,
+          at: new Date().toISOString(),
+        });
+        return done(null, false, { code: 'ALLOWLIST_DENIED' });
+      }
+
+      const temporaryBan = getActiveTemporaryBan(user);
+      if (temporaryBan) {
+        console.warn('[JWT] temporary ban denied', {
+          userId: user._id ? String(user._id) : null,
+          email: user.email || null,
+          temporaryBanUntil: temporaryBan.untilIso,
+          at: new Date().toISOString(),
+        });
+        return done(null, false, {
+          code: TEMPORARY_BAN_CODE,
+          temporaryBanUntil: temporaryBan.untilIso,
+          temporaryBanReason: temporaryBan.reason,
+        });
+      }
+
+      return done(null, user);
     } catch (error) {
       return done(error, false);
     }
@@ -183,11 +302,7 @@ passport.serializeUser((user, done) => {
 passport.deserializeUser(async (id, done) => {
   try {
     const user = await User.findById(id);
-    if (user) {
-      console.log(`[deserializeUser] User ${user.id} refreshToken: ${user.refreshToken ? 'exists' : 'MISSING'}`);
-    } else {
-      console.log(`[deserializeUser] User with ID ${id} not found.`);
-    }
+    // Do not log sensitive token presence
     done(null, user);
   } catch (err) {
     console.error(`[deserializeUser] Error deserializing user ${id}:`, err);

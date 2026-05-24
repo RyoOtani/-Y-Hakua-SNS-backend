@@ -94,6 +94,9 @@ const userSchema = new mongoose.Schema(
     googleId: {
       type: String,
     },
+    appleId: {
+      type: String,
+    },
     profilePicture: {
       type: String,
     },
@@ -114,12 +117,28 @@ const userSchema = new mongoose.Schema(
       max: 50,
       default: "",
     },
+    profileTags: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: (tags) => Array.isArray(tags) && tags.length <= 12,
+        message: 'profileTags can contain at most 12 items.',
+      },
+    },
     // Add fields to store Google OAuth tokens
     accessToken: {
       type: String,
     },
     refreshToken: {
       type: String,
+    },
+    fcmToken: {
+      type: String,
+      default: null,
+    },
+    classroomNotificationCursorAt: {
+      type: Date,
+      default: null,
     },
     followers: [
       {
@@ -133,9 +152,140 @@ const userSchema = new mongoose.Schema(
         ref: 'User',
       },
     ],
+    closeFriends: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
+    blockedUsers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
+    mutedUsers: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+    ],
+    hasElevatedAccess: {
+      type: Boolean,
+      default: false,
+    },
+    elevatedAccessSource: {
+      type: String,
+      enum: ['email_exact_match', null],
+      default: null,
+    },
     hasAgreedToPrivacyPolicy: {
       type: Boolean,
       default: false,
+    },
+    // Cross-Account Protection (RISC) 関連フィールド
+    accountLocked: {
+      type: Boolean,
+      default: false,
+    },
+    lockedAt: {
+      type: Date,
+    },
+    lockReason: {
+      type: String,
+    },
+    requiresReauth: {
+      type: Boolean,
+      default: false,
+    },
+    temporaryBanUntil: {
+      type: Date,
+      default: null,
+    },
+    temporaryBanReason: {
+      type: String,
+      max: 200,
+      default: null,
+    },
+    temporaryBannedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    emailBlockActive: {
+      type: Boolean,
+      default: false,
+    },
+    emailBlockReason: {
+      type: String,
+      max: 200,
+      default: null,
+    },
+    emailBlockedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    emailBlockedAt: {
+      type: Date,
+      default: null,
+    },
+    notificationDeliveryMode: {
+      type: String,
+      enum: ['immediate', 'batched'],
+      default: 'immediate',
+    },
+    lastBatchedNotificationSentAt: {
+      type: Date,
+      default: null,
+    },
+    notificationPreferences: {
+      like: {
+        type: Boolean,
+        default: true,
+      },
+      comment: {
+        type: Boolean,
+        default: true,
+      },
+      repost: {
+        type: Boolean,
+        default: true,
+      },
+      follow: {
+        type: Boolean,
+        default: true,
+      },
+      message: {
+        type: Boolean,
+        default: true,
+      },
+      newPost: {
+        type: Boolean,
+        default: true,
+      },
+    },
+    learningRankingBadge: {
+      rank: {
+        type: Number,
+        enum: [1, 2, 3],
+      },
+      weekStartKey: {
+        type: String,
+      },
+      sourceWeekKey: {
+        type: String,
+      },
+      totalMinutes: {
+        type: Number,
+        min: 0,
+      },
+      awardedAt: {
+        type: Date,
+      },
+      expiresAt: {
+        type: Date,
+      },
     },
   },
   { timestamps: true }

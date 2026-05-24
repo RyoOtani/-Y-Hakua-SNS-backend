@@ -14,10 +14,14 @@ const PostSchema = new mongoose.Schema(
     desc: {
       type: String,
       max: 500,
-      required: true,
+      default: "",
     },
     img: {
       type: String,
+    },
+    imgs: {
+      type: [String],
+      default: [],
     },
     video: {
       type: String,
@@ -25,13 +29,64 @@ const PostSchema = new mongoose.Schema(
     file: {
       type: String,
     },
+    visibility: {
+      type: String,
+      enum: ['public', 'close_friends', 'community'],
+      default: 'public',
+    },
+    postMode: {
+      type: String,
+      enum: ['public', 'anonymous', 'community'],
+      default: 'public',
+    },
+    communityId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Community',
+      default: null,
+    },
+    anonymousLabel: {
+      type: String,
+      default: '',
+    },
     likes: {
+      type: Array,
+      default: [],
+    },
+    reposts: {
+      type: Array,
+      default: [],
+    },
+    viewCount: {
+      type: Number,
+      default: 0,
+    },
+    viewedBy: {
       type: Array,
       default: [],
     },
     comment: {
       type: Number,
       default: 0,
+    },
+    visibility: {
+      type: String,
+      enum: ['public', 'close_friends'],
+      default: 'public',
+    },
+    moderationStatus: {
+      type: String,
+      enum: ['active', 'hidden_by_reports'],
+      default: 'active',
+    },
+    moderationSummary: {
+      reportedCount: {
+        type: Number,
+        default: 0,
+      },
+      lastReportedAt: {
+        type: Date,
+        default: null,
+      },
     },
   },
   { timestamps: true }
