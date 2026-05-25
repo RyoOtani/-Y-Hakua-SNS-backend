@@ -1,10 +1,19 @@
 const router = require("express").Router();
 const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
-const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const sharp = require("sharp");
+const { Readable } = require("stream");
 const dotenv = require("dotenv");
+const rateLimit = require("express-rate-limit");
+const { ipKeyGenerator } = require("express-rate-limit");
+const { authenticate } = require("../middleware/auth");
 
 dotenv.config();
+
+const normalizeRateLimitKey = (req) => {
+  const ip = req.ip || req.socket?.remoteAddress || "";
+  return ipKeyGenerator(ip);
+};
 
 // Cloudinary Configuration
 cloudinary.config({
@@ -13,68 +22,136 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
-  params: async (req, file) => {
-    let folder = "others";
-    if (req.query.type === "post") {
-      folder = "post";
-    } else if (req.query.type === "cover") {
-      folder = "cover";
-    }
+// 許可するMIMEタイプ
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+const ALLOWED_VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm'];
+const ALLOWED_MIME_TYPES = [...ALLOWED_IMAGE_TYPES, ...ALLOWED_VIDEO_TYPES];
 
-    let resource_type = "image";
-    let allowed_formats = ["jpg", "png", "jpeg", "gif", "webp"];
+// 画像圧縮のパラメータ
+const TARGET_MAX_BYTES = 1 * 1024 * 1024; // 1MB以下を目標
+const DIMENSION_STEPS = [1600, 1400, 1200, 1000];
+const QUALITY_STEPS = [75, 65, 55, 45, 35];
+// 動画圧縮（Cloudinary側でのトランスコード設定）
+const VIDEO_MAX_DIMENSION = 1280;
+const VIDEO_BITRATE = "1500k"; // 目安ビットレート
 
-    if (file.mimetype.startsWith("video")) {
-      resource_type = "video";
-      allowed_formats = ["mp4", "mov", "avi", "webm", "mkv"];
-    } else if (!file.mimetype.startsWith("image")) {
-      resource_type = "raw";
-      allowed_formats = undefined;
-    }
+// メモリストレージで受け取り、sharpで圧縮してからCloudinaryへストリームアップロード
+const storage = multer.memoryStorage();
 
-    return {
-      folder: folder,
-      resource_type: resource_type,
-      allowed_formats: allowed_formats,
-      public_id: Date.now() + "-" + file.originalname.replace(/\.[^/.]+$/, "").replace(/\s+/g, '-'),
-    };
-  },
-});
+// ファイルフィルター
+const fileFilter = (req, file, cb) => {
+  if (ALLOWED_MIME_TYPES.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error('許可されていないファイル形式です'), false);
+  }
+};
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 100 * 1024 * 1024 } // 100MB limit
+  // クライアント側は35MBまでに制限
+  limits: { fileSize: 40 * 1024 * 1024 },
+  fileFilter: fileFilter,
 });
 
-router.post("/", (req, res) => {
-  upload.single("file")(req, res, (err) => {
+const uploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: normalizeRateLimitKey,
+});
+
+// 画像を1MB以下に近づけるための圧縮（段階的にリサイズ＋品質調整）
+const compressToUnderTarget = async (buffer) => {
+  for (const dim of DIMENSION_STEPS) {
+    for (const quality of QUALITY_STEPS) {
+      const output = await sharp(buffer)
+        .rotate()
+        .resize({ width: dim, height: dim, fit: "inside" })
+        .jpeg({ quality, mozjpeg: true })
+        .toBuffer();
+      if (output.length <= TARGET_MAX_BYTES) {
+        return output;
+      }
+      buffer = output; // 次のループではこれをさらに圧縮する
+    }
+  }
+  return buffer; // これ以上は落とさないが、最終圧縮結果を返す
+};
+
+router.post("/", authenticate, uploadLimiter, (req, res) => {
+  upload.single("file")(req, res, async (err) => {
     if (err instanceof multer.MulterError) {
       console.error("Multer error:", err);
       if (err.code === "LIMIT_FILE_SIZE") {
-        return res.status(400).json("ファイルサイズが大きすぎます (上限100MB)");
+        return res.status(400).json({ error: "ファイルサイズが大きすぎます (上限100MB)" });
       }
-      return res.status(500).json(err);
+      return res.status(400).json({ error: "ファイルアップロードエラー" });
     } else if (err) {
-      console.error("Unknown upload error:", err);
-      return res.status(500).json(err);
+      console.error("Upload error:", err);
+      return res.status(400).json({ error: err.message || "アップロードに失敗しました" });
     }
 
     try {
       if (!req.file) {
-        console.log("No file received in upload request");
-        return res.status(400).json("No file uploaded.");
+        return res.status(400).json({ error: "ファイルが選択されていません" });
       }
 
-      // Cloudinary returns the full secure_url
-      const filePath = req.file.path;
+      const { fileTypeFromBuffer } = await import('file-type');
+      const detected = await fileTypeFromBuffer(req.file.buffer);
+      const detectedMime = detected?.mime;
 
-      console.log("File uploaded successfully to Cloudinary:", filePath);
-      return res.status(200).json({ filePath: filePath });
+      // Magic-byte validation to prevent spoofed mimetypes
+      if (!detectedMime || !ALLOWED_MIME_TYPES.includes(detectedMime)) {
+        return res.status(400).json({ error: "許可されていないファイル形式です" });
+      }
+
+      const isImage = ALLOWED_IMAGE_TYPES.includes(detectedMime);
+      const isVideo = ALLOWED_VIDEO_TYPES.includes(detectedMime);
+      let uploadBuffer = req.file.buffer;
+      let resource_type = isImage ? "image" : "video";
+
+      // 画像の場合のみ、1MB以下を目標に段階的圧縮（rotateでEXIF補正）
+      if (isImage && uploadBuffer.length > TARGET_MAX_BYTES) {
+        uploadBuffer = await compressToUnderTarget(uploadBuffer);
+      }
+
+      const folder = req.query.type === "post" ? "post" : req.query.type === "cover" ? "cover" : "others";
+      const public_id = Date.now() + "-" + req.file.originalname.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, '_');
+
+      const options = {
+        resource_type,
+        folder,
+        public_id,
+        format: isImage ? "jpg" : "mp4",
+      };
+
+      // 動画はCloudinary側でリミット＋ビットレートを指定して転送量を抑える
+      if (isVideo) {
+        options.transformation = [{
+          width: VIDEO_MAX_DIMENSION,
+          height: VIDEO_MAX_DIMENSION,
+          crop: "limit",
+          bit_rate: VIDEO_BITRATE,
+          quality: "auto:good",
+          fetch_format: "mp4",
+        }];
+      }
+
+      const uploadStream = cloudinary.uploader.upload_stream(options, (error, result) => {
+        if (error) {
+          console.error("Cloudinary upload error:", error);
+          return res.status(400).json({ error: "Cloudinaryへのアップロードに失敗しました" });
+        }
+        console.log("File uploaded successfully to Cloudinary:", result.secure_url);
+        return res.status(200).json({ filePath: result.secure_url });
+      });
+
+      Readable.from(uploadBuffer).pipe(uploadStream);
     } catch (err) {
       console.error("Upload processing error:", err);
-      res.status(500).json(err);
+      res.status(500).json({ error: "アップロード処理に失敗しました" });
     }
   });
 });

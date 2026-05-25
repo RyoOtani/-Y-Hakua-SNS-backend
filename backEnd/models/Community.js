@@ -5,38 +5,35 @@ const CommunitySchema = new mongoose.Schema(
     name: {
       type: String,
       required: true,
-      trim: true,
-      maxlength: 40,
+      max: 50,
     },
     slug: {
       type: String,
       required: true,
       unique: true,
-      trim: true,
-      lowercase: true,
-      maxlength: 60,
+      max: 50,
     },
     description: {
       type: String,
+      max: 500,
       default: '',
-      maxlength: 200,
     },
     ownerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true,
     },
-    members: [
-      {
+    members: {
+      type: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-      },
-    ],
+      }],
+      default: [],
+    },
     tags: {
       type: [String],
       default: [],
     },
-    // Optional: restrict community membership/conversations to users having this profile tag
     tagFilter: {
       type: String,
       default: null,
@@ -53,7 +50,7 @@ const CommunitySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-CommunitySchema.index({ slug: 1 });
-CommunitySchema.index({ ownerId: 1, createdAt: -1 });
+CommunitySchema.index({ tagFilter: 1 });
+CommunitySchema.index({ members: 1 });
 
 module.exports = mongoose.model('Community', CommunitySchema);

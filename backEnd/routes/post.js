@@ -1,8 +1,10 @@
 const router = require("express").Router();
+const mongoose = require("mongoose");
 const Post = require("../models/Post");
 const User = require("../models/User");
 const Comment = require("../models/Comment");
 const Notification = require("../models/Notification");
+const Community = require("../models/Community");
 const { saveHashtags, getTodayDate, getTodayRangeUtc } = require("./hashtag");
 const redisClient = require("../redisClient");
 const { authenticate, optionalAuthenticate } = require("../middleware/auth");
@@ -28,19 +30,65 @@ const {
   buildVisibilityQueryForViewer,
   canViewerSeePost,
 } = require("../utils/postVisibility");
-const Community = require("../models/Community");
-
-const normalizePostMode = (body) => {
-  if (body && body.communityId) return "community";
-  if (body && (body.isAnonymous || String(body.postMode) === 'anonymous')) return "anonymous";
-  return "public";
-};
 
 const ACTIVE_CONTENT_STATUS = { $ne: "hidden_by_reports" };
 const DEFAULT_YAPPY_DISABLED_REPLY = "いまAIサービスが停止中なので、少し時間を置いてからもう一度 #Yappy で呼んでね。";
 const DEFAULT_YAPPY_ERROR_REPLY = "返信の作成に失敗したよ。少し時間を置いてからもう一度 #Yappy で呼んでね。";
 const YAPPY_COMMENT_CONTEXT_MAX_ITEMS = 40;
 const YAPPY_CONTEXT_TEXT_MAX_LENGTH = 220;
+
+const COMMUNITY_POST_MODES = new Set(['community', 'anonymous']);
+
+const normalizePostMode = (body) => {
+  const rawMode = String(body?.postMode || '').toLowerCase();
+  if (rawMode === 'community' || rawMode === 'anonymous') return rawMode;
+  if (body?.communityId) return 'community';
+  return 'public';
+};
+
+const isCommunityPostMode = (mode) => COMMUNITY_POST_MODES.has(mode);
+
+const isCommunityMember = (community, userId) => (
+  Array.isArray(community?.members)
+    && community.members.some((memberId) => memberId.toString() === userId)
+);
+
+const ensureCommunityAccess = async ({ communityId, userId }) => {
+  if (!communityId) {
+    return { error: { status: 400, message: 'communityId が必要です' } };
+  }
+
+  if (!communityId || !mongoose.Types.ObjectId.isValid(String(communityId))) {
+    return { error: { status: 400, message: '無効なコミュニティIDです' } };
+  }
+
+  const community = await Community.findById(communityId);
+  if (!community) {
+    return { error: { status: 404, message: 'コミュニティが見つかりません' } };
+  }
+
+  const isOwner = community.ownerId.toString() === userId;
+  if (!isOwner && !isCommunityMember(community, userId)) {
+    return { error: { status: 403, message: 'コミュニティに参加してください' } };
+  }
+
+  return { community };
+};
+
+const ensureCommunityPostAccess = async ({ post, viewer }) => {
+  if (!post?.communityId) return { ok: true };
+  if (!viewer?._id) {
+    return { ok: false, error: { status: 401, message: '認証が必要です' } };
+  }
+  const access = await ensureCommunityAccess({
+    communityId: post.communityId,
+    userId: viewer._id.toString(),
+  });
+  if (access.error) {
+    return { ok: false, error: access.error };
+  }
+  return { ok: true, community: access.community };
+};
 
 const isNotificationEnabled = (userDoc, key) => {
   const prefs = userDoc?.notificationPreferences;
@@ -424,21 +472,45 @@ router.post("/", authenticate, async (req, res) => {
   try {
     const filteredDesc = censorText(req.body.desc);
     const imgs = normalizeImagePaths(req.body);
-    const postVisibility = normalizePostVisibility(req.body.visibility);
+    const postMode = normalizePostMode(req.body);
+    const communityId = req.body?.communityId ? String(req.body.communityId) : null;
+    const isCommunityPost = isCommunityPostMode(postMode);
+    const postVisibility = isCommunityPost
+      ? POST_VISIBILITY.PUBLIC
+      : normalizePostVisibility(req.body.visibility);
     if (!String(filteredDesc || '').trim() && imgs.length === 0 && !req.body.video) {
       return res.status(400).json({ error: '本文または画像/動画のいずれかが必要です' });
     }
 
-    if (postVisibility === POST_VISIBILITY.CLOSE_FRIENDS) {
+    if (!isCommunityPost && postVisibility === POST_VISIBILITY.CLOSE_FRIENDS) {
       const canPostToCloseFriends = await hasCloseFriends(req.user._id);
       if (!canPostToCloseFriends) {
         return res.status(400).json({ error: '親友リストが空です。先に親友を追加してください' });
       }
     }
 
-    const postMode = normalizePostMode(req.body);
-    const anonymousLabel = postMode === "anonymous" ? (req.body.anonymousLabel || "匿名") : "";
-    const computedVisibility = req.body.visibility || (postMode === "community" ? "community" : postVisibility);
+    let community = null;
+    if (isCommunityPost) {
+      const access = await ensureCommunityAccess({
+        communityId,
+        userId: req.user._id.toString(),
+      });
+      if (access.error) {
+        return res.status(access.error.status).json({ error: access.error.message });
+      }
+      community = access.community;
+      if (postMode === 'anonymous' && !community.allowAnonymousPosts) {
+        return res.status(403).json({ error: 'このコミュニティでは匿名投稿が許可されていません' });
+      }
+    }
+
+    if (!isCommunityPost && communityId) {
+      return res.status(400).json({ error: 'コミュニティ投稿はコミュニティ内でのみ作成できます' });
+    }
+
+    const anonymousLabel = postMode === 'anonymous'
+      ? String(req.body?.anonymousLabel || '匿名').trim().slice(0, 20)
+      : '';
 
     // ホワイトリスト方式で投稿作成
     const newPost = new Post({
@@ -447,9 +519,9 @@ router.post("/", authenticate, async (req, res) => {
       img: imgs[0] || req.body.img,
       imgs,
       video: req.body.video,
-      visibility: computedVisibility,
+      visibility: postVisibility,
       postMode,
-      communityId: req.body.communityId || null,
+      communityId: community ? community._id : null,
       anonymousLabel,
     });
     const savedPost = await newPost.save();
@@ -465,9 +537,12 @@ router.post("/", authenticate, async (req, res) => {
 
     // 投稿者のフォロワーを取得して通知を送る
     const user = await User.findById(req.user._id);
-    const notificationTargets = postVisibility === POST_VISIBILITY.CLOSE_FRIENDS
+    const shouldNotifyFollowers = !isCommunityPost;
+    const notificationTargets = shouldNotifyFollowers && postVisibility === POST_VISIBILITY.CLOSE_FRIENDS
       ? user?.closeFriends || []
-      : user?.followers || [];
+      : shouldNotifyFollowers
+        ? user?.followers || []
+        : [];
 
     if (user && notificationTargets.length > 0) {
       const io = req.app.get('io');
@@ -592,6 +667,11 @@ router.put("/:id/like", authenticate, async (req, res) => {
       return res.status(404).json({ error: '投稿が見つかりません' });
     }
 
+    const communityAccess = await ensureCommunityPostAccess({ post, viewer: req.user });
+    if (!communityAccess.ok) {
+      return res.status(communityAccess.error.status).json({ error: communityAccess.error.message });
+    }
+
     const viewerContext = await buildViewerVisibilityContext(req.user._id);
     if (!canViewerSeePost(post, viewerContext)) {
       return res.status(403).json({ error: 'この投稿を見る権限がありません' });
@@ -702,6 +782,11 @@ router.put("/:id/repost", authenticate, async (req, res) => {
       return res.status(404).json({ error: '投稿が見つかりません' });
     }
 
+    const communityAccess = await ensureCommunityPostAccess({ post, viewer: req.user });
+    if (!communityAccess.ok) {
+      return res.status(communityAccess.error.status).json({ error: communityAccess.error.message });
+    }
+
     const viewerContext = await buildViewerVisibilityContext(req.user._id);
     if (!canViewerSeePost(post, viewerContext)) {
       return res.status(403).json({ error: 'この投稿を見る権限がありません' });
@@ -796,6 +881,11 @@ router.put('/:id/view', authenticate, async (req, res) => {
       return res.status(404).json({ error: '投稿が見つかりません' });
     }
 
+    const communityAccess = await ensureCommunityPostAccess({ post, viewer: req.user });
+    if (!communityAccess.ok) {
+      return res.status(communityAccess.error.status).json({ error: communityAccess.error.message });
+    }
+
     const viewerContext = await buildViewerVisibilityContext(req.user._id);
     if (!canViewerSeePost(post, viewerContext)) {
       return res.status(403).json({ error: 'この投稿を見る権限がありません' });
@@ -843,6 +933,7 @@ router.get("/timeline/all", optionalAuthenticate, async (req, res) => {
     const postMatchFilter = {
       ...visibilityFilter,
       moderationStatus: ACTIVE_CONTENT_STATUS,
+      postMode: { $nin: ['community', 'anonymous'] },
     };
 
     const userLookupStage = {
@@ -931,11 +1022,16 @@ router.get("/profile/:username", optionalAuthenticate, async (req, res) => {
     const skip = (page - 1) * limit;
     const viewerContext = await buildViewerVisibilityContext(req.user?._id);
     const visibilityFilter = buildVisibilityQueryForViewer(viewerContext);
+    const viewerId = req.user?._id ? req.user._id.toString() : null;
+    const communityFilter = viewerId && viewerId === user._id.toString()
+      ? {}
+      : { postMode: { $nin: ['community', 'anonymous'] } };
 
     const posts = await Post.find({
       userId: user._id,
       moderationStatus: ACTIVE_CONTENT_STATUS,
       ...visibilityFilter,
+      ...communityFilter,
     })
       .populate("userId", "username profilePicture")
       .sort({ createdAt: -1 })
@@ -983,6 +1079,7 @@ router.get('/search', optionalAuthenticate, async (req, res) => {
     const posts = await Post.find({
       ...visibilityFilter,
       moderationStatus: ACTIVE_CONTENT_STATUS,
+      postMode: { $nin: ['community', 'anonymous'] },
       desc: { $regex: sanitizedQuery, $options: 'i' }
     })
       .populate('userId', 'username profilePicture')
@@ -1025,6 +1122,9 @@ router.get("/like-ranking", optionalAuthenticate, async (req, res) => {
               "username profilePicture"
             );
             if (isHiddenByModeration(post)) {
+              return null;
+            }
+            if (post?.communityId || COMMUNITY_POST_MODES.has(post?.postMode)) {
               return null;
             }
             if (!canViewerSeePost(post, viewerContext)) {
@@ -1099,6 +1199,7 @@ router.get("/like-ranking", optionalAuthenticate, async (req, res) => {
         const post = postsMap[item._id.toString()];
         if (!post) return null;
         if (!canViewerSeePost(post, viewerContext)) return null;
+        if (post?.communityId || COMMUNITY_POST_MODES.has(post?.postMode)) return null;
         return {
           postId: post._id,
           rank: index + 1,
@@ -1188,6 +1289,11 @@ router.get("/:id", optionalAuthenticate, async (req, res) => {
       return res.status(404).json({ error: '投稿が見つかりません' });
     }
 
+    const communityAccess = await ensureCommunityPostAccess({ post, viewer: req.user });
+    if (!communityAccess.ok) {
+      return res.status(communityAccess.error.status).json({ error: communityAccess.error.message });
+    }
+
     const viewerContext = await buildViewerVisibilityContext(req.user?._id);
     if (!canViewerSeePost(post, viewerContext)) {
       return res.status(404).json({ error: '投稿が見つかりません' });
@@ -1218,6 +1324,11 @@ router.post("/:id/comment", authenticate, async (req, res) => {
     }
     if (isHiddenByModeration(post)) {
       return res.status(404).json({ error: '投稿が見つかりません' });
+    }
+
+    const communityAccess = await ensureCommunityPostAccess({ post, viewer: req.user });
+    if (!communityAccess.ok) {
+      return res.status(communityAccess.error.status).json({ error: communityAccess.error.message });
     }
 
     const viewerContext = await buildViewerVisibilityContext(req.user._id);
@@ -1327,6 +1438,11 @@ router.get("/:id/comments", optionalAuthenticate, async (req, res) => {
       return res.status(404).json({ error: '投稿が見つかりません' });
     }
 
+    const communityAccess = await ensureCommunityPostAccess({ post, viewer: req.user });
+    if (!communityAccess.ok) {
+      return res.status(communityAccess.error.status).json({ error: communityAccess.error.message });
+    }
+
     const viewerContext = await buildViewerVisibilityContext(req.user?._id);
     if (!canViewerSeePost(post, viewerContext)) {
       return res.status(403).json({ error: 'この投稿を見る権限がありません' });
@@ -1357,6 +1473,11 @@ router.post('/:id/report', authenticate, async (req, res) => {
       .select('userId moderationStatus moderationSummary visibility');
     if (!post || isHiddenByModeration(post)) {
       return res.status(404).json({ error: '投稿が見つかりません' });
+    }
+
+    const communityAccess = await ensureCommunityPostAccess({ post, viewer: req.user });
+    if (!communityAccess.ok) {
+      return res.status(communityAccess.error.status).json({ error: communityAccess.error.message });
     }
 
     const viewerContext = await buildViewerVisibilityContext(req.user._id);
@@ -1427,6 +1548,11 @@ router.post('/:id/comment/:commentId/report', authenticate, async (req, res) => 
       return res.status(404).json({ error: 'コメントが見つかりません' });
     }
 
+    const communityAccess = await ensureCommunityPostAccess({ post, viewer: req.user });
+    if (!communityAccess.ok) {
+      return res.status(communityAccess.error.status).json({ error: communityAccess.error.message });
+    }
+
     const viewerContext = await buildViewerVisibilityContext(req.user._id);
     if (!canViewerSeePost(post, viewerContext)) {
       return res.status(403).json({ error: 'このコメントを通報する権限がありません' });
@@ -1495,6 +1621,16 @@ router.delete("/:id/comment/:commentId", authenticate, async (req, res) => {
       return res.status(404).json({ error: "コメントが見つかりません" });
     }
 
+    const post = await Post.findById(req.params.id);
+    if (!post || isHiddenByModeration(post)) {
+      return res.status(404).json({ error: '投稿が見つかりません' });
+    }
+
+    const communityAccess = await ensureCommunityPostAccess({ post, viewer: req.user });
+    if (!communityAccess.ok) {
+      return res.status(communityAccess.error.status).json({ error: communityAccess.error.message });
+    }
+
     // 削除権限の確認: コメント投稿者のみ
     if (comment.userId.toString() !== req.user._id.toString()) {
       return res.status(403).json({ error: "自分のコメントのみ削除できます" });
@@ -1514,25 +1650,5 @@ router.delete("/:id/comment/:commentId", authenticate, async (req, res) => {
 });
 
 
-
-
-router.get("/community/:communityId", async (req, res) => {
-  try {
-    const community = await Community.findById(req.params.communityId);
-    if (!community) {
-      return res.status(404).json({ error: "コミュニティが見つかりません" });
-    }
-
-    const posts = await Post.find({ communityId: req.params.communityId })
-      .populate("userId", "username profilePicture")
-      .sort({ createdAt: -1 })
-      .limit(50);
-
-    res.status(200).json({ community, posts });
-  } catch (err) {
-    console.error("Error in /community/:communityId:", err);
-    res.status(500).json(err);
-  }
-});
-
 module.exports = router;
+

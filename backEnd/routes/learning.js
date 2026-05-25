@@ -128,6 +128,51 @@ router.post('/sessions/stop', authenticate, async (req, res) => {
     }
 });
 
+// 学習セッションを手動記録
+router.post('/sessions/manual', authenticate, async (req, res) => {
+    try {
+        const userId = req.user._id;
+        const minutes = Number(req.body?.minutes || 0);
+        const subject = String(req.body?.subject || '').trim();
+
+        if (!Number.isFinite(minutes) || minutes <= 0) {
+            return res.status(400).json({ message: 'minutes は1以上の数値が必要です' });
+        }
+
+        const activeSession = await LearningSession.findOne({ userId, isActive: true });
+        if (activeSession) {
+            return res.status(409).json({ message: '学習中のセッションがあります。先に終了してください' });
+        }
+
+        const duration = toMinuteFloor(minutes);
+        const endTime = new Date();
+        const startTime = new Date(endTime.getTime() - duration * 60 * 1000);
+
+        const manualSession = new LearningSession({
+            userId,
+            subject,
+            startTime,
+            endTime,
+            duration,
+            isActive: false,
+        });
+
+        const savedSession = await manualSession.save();
+
+        try {
+            const rankingKey = getDailyRankingKey();
+            await redis.zIncrBy(rankingKey, duration, userId.toString());
+        } catch (redisErr) {
+            console.error('Redis ranking update failed:', redisErr);
+        }
+
+        return res.status(201).json(savedSession);
+    } catch (err) {
+        console.error('Error creating manual session:', err);
+        return res.status(500).json({ message: '手動記録に失敗しました' });
+    }
+});
+
 // 学習進捗を同期（モバイル側の定期送信用）
 router.put('/sessions/progress', authenticate, async (req, res) => {
     try {

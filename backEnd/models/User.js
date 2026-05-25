@@ -183,6 +183,10 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    hasCompletedTagSelection: {
+      type: Boolean,
+      default: false,
+    },
     // Cross-Account Protection (RISC) 関連フィールド
     accountLocked: {
       type: Boolean,
@@ -290,5 +294,7 @@ const userSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+userSchema.index({ profileTags: 1 });
 
 module.exports = mongoose.model('User', userSchema);

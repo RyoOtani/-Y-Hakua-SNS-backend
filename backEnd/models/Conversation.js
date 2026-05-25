@@ -18,6 +18,12 @@ const ConversationSchema = new mongoose.Schema(
       trim: true,
       maxlength: 60,
     },
+    communityId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Community',
+      default: null,
+      index: true,
+    },
     // 最新メッセージの参照
     lastMessage: {
       type: mongoose.Schema.Types.ObjectId,

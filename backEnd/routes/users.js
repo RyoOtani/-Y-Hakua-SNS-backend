@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const User = require("../models/User");
 const Notification = require("../models/Notification");
+const Community = require("../models/Community");
 const mongoose = require("mongoose");
 const redisClient = require("../redisClient");
 const { authenticate, requireElevatedAccess } = require("../middleware/auth");
@@ -14,9 +15,23 @@ const {
   getEmailBlockState,
   normalizeEmailBlockReason,
 } = require('../utils/emailBlock');
+const {
+  PROFILE_TAG_CATEGORIES,
+  ALL_PROFILE_TAGS,
+  MAX_PROFILE_TAGS,
+  isValidProfileTag,
+} = require('../constants/profileTags');
 
 const MAX_TEMP_BAN_DURATION_MINUTES = 60 * 24 * 30;
 const MAX_TEMP_BAN_REASON_LENGTH = 200;
+
+const normalizeProfileTags = (value) => {
+  const raw = Array.isArray(value) ? value : [];
+  const normalized = raw
+    .map((tag) => String(tag || '').trim())
+    .filter((tag) => isValidProfileTag(tag));
+  return Array.from(new Set(normalized)).slice(0, MAX_PROFILE_TAGS);
+};
 
 const normalizeObjectIdList = (input) => {
   const values = Array.isArray(input) ? input : [input];
@@ -256,8 +271,8 @@ router.get("/:id/settings", async (req, res) => {
     if (!user) {
       return res.status(404).json("ユーザーが見つかりません。");
     }
-    const { backgroundColor, font, coverPicture, desc } = user;
-    res.status(200).json({ backgroundColor, font, coverPicture, desc });
+    const { backgroundColor, font, coverPicture, desc, profileTags } = user;
+    res.status(200).json({ backgroundColor, font, coverPicture, desc, profileTags });
   } catch (err) {
     res.status(500).json(err);
   }
@@ -271,22 +286,85 @@ router.put("/:id/settings", authenticate, async (req, res) => {
   }
 
   try {
-    const updates = {
-      backgroundColor: req.body.backgroundColor,
-      font: req.body.font,
-      coverPicture: req.body.coverPicture,
-      desc: req.body.desc,
-    };
-    if (req.body.profileTags !== undefined) {
-      updates.profileTags = req.body.profileTags;
-    }
+    const profileTags = normalizeProfileTags(req.body.profileTags);
     await User.findByIdAndUpdate(req.params.id, {
-      $set: updates,
+      $set: {
+        backgroundColor: req.body.backgroundColor,
+        font: req.body.font,
+        coverPicture: req.body.coverPicture,
+        desc: req.body.desc,
+        ...(req.body.profileTags !== undefined ? { profileTags } : {}),
+      },
     });
     res.status(200).json("設定が更新されました。");
   } catch (err) {
     console.error("Settings Update Error:", err);
     res.status(500).json(err);
+  }
+});
+
+router.get('/:id/tags', authenticate, async (req, res) => {
+  const targetUserId = String(req.params.id || '');
+  if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
+    return res.status(400).json({ error: '無効なユーザーIDです。' });
+  }
+
+  if (req.user._id.toString() !== targetUserId && !req.user.hasElevatedAccess) {
+    return res.status(403).json({ error: 'この情報を閲覧する権限がありません' });
+  }
+
+  try {
+    const user = await User.findById(targetUserId).select('profileTags');
+    if (!user) {
+      return res.status(404).json({ error: 'ユーザーが見つかりません' });
+    }
+    return res.status(200).json({ tags: Array.isArray(user.profileTags) ? user.profileTags : [] });
+  } catch (err) {
+    console.error('Profile tags fetch error:', err);
+    return res.status(500).json({ error: 'タグの取得に失敗しました' });
+  }
+});
+
+router.put('/:id/tags', authenticate, async (req, res) => {
+  const targetUserId = String(req.params.id || '');
+  if (!mongoose.Types.ObjectId.isValid(targetUserId)) {
+    return res.status(400).json({ error: '無効なユーザーIDです。' });
+  }
+
+  if (req.user._id.toString() !== targetUserId && !req.user.hasElevatedAccess) {
+    return res.status(403).json({ error: '自分のタグのみ更新できます' });
+  }
+
+  const nextTags = normalizeProfileTags(req.body?.tags);
+  if (nextTags.length > MAX_PROFILE_TAGS) {
+    return res.status(400).json({ error: `タグは最大${MAX_PROFILE_TAGS}個までです` });
+  }
+  if (nextTags.length === 0) {
+    return res.status(400).json({ error: '有効なタグを1つ以上選択してください' });
+  }
+
+  const communityId = req.body?.communityId ? String(req.body.communityId) : null;
+  if (communityId) {
+    if (!mongoose.Types.ObjectId.isValid(communityId)) {
+      return res.status(400).json({ error: '無効なコミュニティIDです' });
+    }
+    const community = await Community.findById(communityId).select('tags');
+    if (!community) {
+      return res.status(404).json({ error: 'コミュニティが見つかりません' });
+    }
+    const allowedTags = Array.isArray(community.tags) ? community.tags.map((t) => String(t)) : [];
+    const invalidTags = nextTags.filter((tag) => !allowedTags.includes(tag));
+    if (invalidTags.length > 0) {
+      return res.status(400).json({ error: 'コミュニティのタグのみ選択できます' });
+    }
+  }
+
+  try {
+    await User.findByIdAndUpdate(targetUserId, { $set: { profileTags: nextTags, hasCompletedTagSelection: true } });
+    return res.status(200).json({ tags: nextTags, hasCompletedTagSelection: true });
+  } catch (err) {
+    console.error('Profile tags update error:', err);
+    return res.status(500).json({ error: 'タグの更新に失敗しました' });
   }
 });
 
@@ -775,6 +853,99 @@ router.get("/search", async (req, res) => {
   } catch (err) {
     console.error('Search error:', err);
     res.status(500).json({ error: "ユーザー検索に失敗しました" });
+  }
+});
+
+router.get('/tags/catalog', authenticate, (req, res) => {
+  return res.status(200).json({
+    categories: PROFILE_TAG_CATEGORIES,
+    allTags: ALL_PROFILE_TAGS,
+    maxTags: MAX_PROFILE_TAGS,
+  });
+});
+
+router.get('/by-tag/:tag', authenticate, async (req, res) => {
+  const tag = String(req.params.tag || '').trim();
+  if (!isValidProfileTag(tag)) {
+    return res.status(400).json({ error: '無効なタグです' });
+  }
+
+  try {
+    const users = await User.find({
+      _id: { $ne: req.user._id },
+      profileTags: tag,
+    })
+      .select('username profilePicture desc profileTags followers')
+      .limit(30)
+      .lean();
+
+    const payload = users.map((u) => ({
+      _id: u._id,
+      username: u.username,
+      profilePicture: u.profilePicture,
+      desc: u.desc || '',
+      profileTags: Array.isArray(u.profileTags) ? u.profileTags : [],
+      followerCount: Array.isArray(u.followers) ? u.followers.length : 0,
+    }));
+
+    return res.status(200).json({ tag, users: payload });
+  } catch (err) {
+    console.error('Users by tag error:', err);
+    return res.status(500).json({ error: 'タグ検索に失敗しました' });
+  }
+});
+
+// プロフィールタグが一致するユーザーを推薦
+router.get('/recommendations/by-tags', authenticate, async (req, res) => {
+  try {
+    const me = await User.findById(req.user._id).select('profileTags following');
+    if (!me) {
+      return res.status(404).json({ error: 'ユーザーが見つかりません' });
+    }
+
+    const myTags = Array.isArray(me.profileTags) ? me.profileTags.map((t) => String(t)) : [];
+    if (myTags.length === 0) {
+      return res.status(200).json({ users: [], matchedTags: [] });
+    }
+
+    const followingIds = (me.following || []).map((id) => id.toString());
+    const excluded = new Set([req.user._id.toString(), ...followingIds]);
+
+    const candidates = await User.find({
+      _id: { $ne: req.user._id },
+      profileTags: { $in: myTags },
+    })
+      .select('username profilePicture desc profileTags followers')
+      .limit(80)
+      .lean();
+
+    const users = candidates
+      .filter((u) => !excluded.has(u._id.toString()))
+      .map((u) => {
+        const tags = Array.isArray(u.profileTags) ? u.profileTags.map(String) : [];
+        const overlap = tags.filter((t) => myTags.includes(t));
+        return {
+          _id: u._id,
+          username: u.username,
+          profilePicture: u.profilePicture,
+          desc: u.desc || '',
+          profileTags: tags,
+          followerCount: Array.isArray(u.followers) ? u.followers.length : 0,
+          matchedTags: overlap,
+          matchScore: overlap.length,
+        };
+      })
+      .filter((u) => u.matchScore > 0)
+      .sort((a, b) => b.matchScore - a.matchScore || b.followerCount - a.followerCount)
+      .slice(0, 20);
+
+    return res.status(200).json({
+      users,
+      matchedTags: myTags,
+    });
+  } catch (err) {
+    console.error('Tag recommendations error:', err);
+    return res.status(500).json({ error: 'タグ一致ユーザーの取得に失敗しました' });
   }
 });
 

@@ -29,14 +29,9 @@ const PostSchema = new mongoose.Schema(
     file: {
       type: String,
     },
-    visibility: {
-      type: String,
-      enum: ['public', 'close_friends', 'community'],
-      default: 'public',
-    },
     postMode: {
       type: String,
-      enum: ['public', 'anonymous', 'community'],
+      enum: ['public', 'community', 'anonymous'],
       default: 'public',
     },
     communityId: {
