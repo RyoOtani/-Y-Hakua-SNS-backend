@@ -1,0 +1,10 @@
+# バックエンド単体リポジトリ（Y-Hakua-SNS-backend 等）を Render のルートにした場合
+services:
+  - type: web
+    name: hakua-sns-backend
+    runtime: node
+    buildCommand: npm ci
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "20"

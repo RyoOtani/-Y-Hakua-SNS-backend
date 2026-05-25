@@ -30,6 +30,23 @@ const {
 } = require('./utils/observability');
 dotenv.config();
 
+const resolveMongoUri = () => (
+  process.env.MONGO_URL
+  || process.env.MONGO_URI
+  || process.env.MONGODB_URI
+  || null
+);
+
+const assertRequiredEnv = () => {
+  const missing = [];
+  if (!process.env.JWT_SECRET) missing.push('JWT_SECRET');
+  if (!process.env.SESSION_SECRET) missing.push('SESSION_SECRET');
+  if (!resolveMongoUri()) missing.push('MONGO_URL (or MONGO_URI / MONGODB_URI)');
+  if (missing.length > 0) {
+    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+  }
+};
+
 const app = express();
 app.set('trust proxy', 1); // Enable trusting proxy for Secure cookies
 installProcessLevelHandlers();
@@ -51,10 +68,9 @@ const io = new Server(server, {
   maxHttpBufferSize: 1 * 1024 * 1024,
 });
 
+assertRequiredEnv();
+
 const SOCKET_JWT_SECRET = process.env.JWT_SECRET;
-if (!SOCKET_JWT_SECRET) {
-  throw new Error('JWT_SECRET must be set for socket authentication');
-}
 const SOCKET_JWT_ISSUER = process.env.JWT_ISSUER || 'hakua-sns';
 const SOCKET_JWT_AUDIENCE = process.env.JWT_AUDIENCE || 'hakua-clients';
 
@@ -478,11 +494,6 @@ app.get("/health", (req, res) => {
 // Serve static assets from the frontend's public directory
 // app.use(express.static('../frontEnd/public'));
 
-// セッション設定（必須環境変数が無ければ起動しない）
-if (!process.env.SESSION_SECRET) {
-  throw new Error('SESSION_SECRET is required for secure sessions');
-}
-
 app.use(session({
   secret: process.env.SESSION_SECRET,
   resave: false,
@@ -499,10 +510,10 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
-// データベース接続
-mongoose.connect(process.env.MONGO_URL)
+const mongoUri = resolveMongoUri();
+mongoose.connect(mongoUri)
   .then(() => console.log('MongoDB connected'))
-  .catch(err => console.error('MongoDB connection error:', err));
+  .catch((err) => console.error('MongoDB connection error:', err));
 
 
 // Upstash Redis (REST) client (falls back to mock when env vars are missing)
