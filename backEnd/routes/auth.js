@@ -304,6 +304,13 @@ router.post("/login", authLimiter, async (req, res) => {
 
 
 // Google OAuth ログイン
+router.get('/google/mobile', (req, res) => {
+  const clientApp = normalizeClientApp(req.query?.clientApp || req.get('x-client-app'));
+  const params = new URLSearchParams({ platform: 'mobile' });
+  if (clientApp) params.set('clientApp', clientApp);
+  return res.redirect(`${req.baseUrl}/google?${params.toString()}`);
+});
+
 router.get(
   '/google',
   (req, res, next) => {
