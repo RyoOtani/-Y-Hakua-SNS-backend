@@ -68,9 +68,11 @@ const normalizeTagsInput = (tags, limit = 24) => (
     : []
 );
 
+const toIdString = (value) => String(value?._id || value || '');
+
 const isMember = (community, userId) => (
   Array.isArray(community?.members)
-    && community.members.some((memberId) => memberId.toString() === userId)
+    && community.members.some((memberId) => toIdString(memberId) === userId)
 );
 
 const hasTagAccess = (userTags = [], tagFilter) => {
@@ -106,7 +108,7 @@ router.get('/', authenticate, async (req, res) => {
 
     const payload = communities.map((c) => {
       const memberCount = Array.isArray(c.members) ? c.members.length : 0;
-      const member = isMember(c, userId) || String(c.ownerId?._id || c.ownerId) === userId;
+      const member = isMember(c, userId) || toIdString(c.ownerId) === userId;
       const { members, ...summary } = c;
       return {
         ...summary,
@@ -285,7 +287,7 @@ router.get('/:communityId', authenticate, async (req, res) => {
     }
 
     const userId = req.user._id.toString();
-    if (!isMember(community, userId) && community.ownerId.toString() !== userId) {
+    if (!isMember(community, userId) && toIdString(community.ownerId) !== userId) {
       return res.status(403).json({ error: 'コミュニティに参加してください' });
     }
 
