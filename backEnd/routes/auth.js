@@ -53,7 +53,7 @@ const AUTH_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === 'production',
   sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-  maxAge: 7 * 24 * 60 * 60 * 1000,
+  maxAge: 365 * 24 * 60 * 60 * 1000, // 365日
   path: '/',
 };
 const OAUTH_CLIENT_APP_COOKIE_NAME = 'oauth_client_app';
@@ -281,7 +281,7 @@ router.post("/login", authLimiter, async (req, res) => {
       { id: user._id, email: user.email },
       JWT_SECRET,
       {
-        expiresIn: '7d',
+        expiresIn: '365d',
         issuer: JWT_ISSUER,
         audience: JWT_AUDIENCE,
       }
@@ -299,6 +299,81 @@ router.post("/login", authLimiter, async (req, res) => {
   } catch (err) {
     console.error('Login error:', err);
     return res.status(500).json({ error: 'ログインに失敗しました' });
+  }
+});
+
+// トークンリフレッシュ（有効なトークンがある場合、新しいトークンを発行）
+router.post("/refresh", async (req, res) => {
+  try {
+    // Cookie または Authorization ヘッダーからトークンを取得
+    let token = null;
+    const authHeader = req.headers?.authorization;
+    if (typeof authHeader === 'string' && authHeader.startsWith('Bearer ')) {
+      token = authHeader.slice('Bearer '.length).trim();
+    }
+    if (!token && req.cookies?.[AUTH_COOKIE_NAME]) {
+      token = req.cookies[AUTH_COOKIE_NAME];
+    }
+
+    if (!token) {
+      return res.status(401).json({ error: 'トークンが見つかりません' });
+    }
+
+    // 現在のトークンを検証（期限切れでもOK、ペイロードだけ取り出す）
+    let decoded;
+    try {
+      decoded = jwt.verify(token, JWT_SECRET, {
+        issuer: JWT_ISSUER,
+        audience: JWT_AUDIENCE,
+      });
+    } catch (verifyErr) {
+      // 期限切れの場合はデコードのみ試みる
+      if (verifyErr.name === 'TokenExpiredError') {
+        decoded = jwt.decode(token);
+      }
+      if (!decoded || !decoded.id) {
+        return res.status(401).json({ error: '無効なトークンです', code: 'TOKEN_INVALID' });
+      }
+    }
+
+    // ユーザーの存在と状態を確認
+    const user = await User.findById(decoded.id);
+    if (!user) {
+      return res.status(401).json({ error: 'ユーザーが見つかりません' });
+    }
+    if (isEmailBlocked({ user })) {
+      return res.status(403).json({ error: EMAIL_BLOCKED_MESSAGE, code: EMAIL_BLOCKED_CODE });
+    }
+
+    const temporaryBan = getActiveTemporaryBan(user);
+    if (temporaryBan) {
+      return res.status(403).json(buildTemporaryBanResponse(temporaryBan));
+    }
+
+    // 新しいトークンを発行
+    const newToken = jwt.sign(
+      { id: user._id, email: user.email },
+      JWT_SECRET,
+      {
+        expiresIn: '365d',
+        issuer: JWT_ISSUER,
+        audience: JWT_AUDIENCE,
+      }
+    );
+
+    // Cookie を更新
+    res.cookie(AUTH_COOKIE_NAME, newToken, AUTH_COOKIE_OPTIONS);
+
+    await syncElevatedAccessByEmailAllowlist(user);
+
+    console.log(`[Auth] token refreshed userId=${user._id}`, {
+      at: new Date().toISOString(),
+    });
+
+    return res.status(200).json({ token: newToken });
+  } catch (err) {
+    console.error('Token refresh error:', err);
+    return res.status(500).json({ error: 'トークンの更新に失敗しました' });
   }
 });
 
@@ -441,7 +516,7 @@ router.get(
         { id: req.user._id, email: req.user.email },
         JWT_SECRET,
         {
-          expiresIn: '7d',
+          expiresIn: '365d',
           issuer: JWT_ISSUER,
           audience: JWT_AUDIENCE,
         }
@@ -641,7 +716,7 @@ router.post('/apple', authLimiter, async (req, res) => {
       { id: user._id, email: user.email },
       JWT_SECRET,
       {
-        expiresIn: '7d',
+        expiresIn: '365d',
         issuer: JWT_ISSUER,
         audience: JWT_AUDIENCE,
       }
@@ -801,7 +876,7 @@ router.post('/apple/callback', async (req, res) => {
           { id: user._id, email: user.email },
           JWT_SECRET,
           {
-            expiresIn: '7d',
+            expiresIn: '365d',
             issuer: JWT_ISSUER,
             audience: JWT_AUDIENCE,
           }
